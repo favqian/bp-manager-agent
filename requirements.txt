@@ -1,0 +1,6 @@
+streamlit==1.56.0
+healthchain==0.2.0
+pandas==3.0.5
+openai==3.3.1
+python-dotenv==1.2.3
+fhir.resources==8.3.0
