@@ -1,0 +1,63 @@
+{
+  "patient_id": "patient_003",
+  "as_of": "2026-01-30",
+  "sufficient": true,
+  "sufficient_reason": "",
+  "window": {
+    "days": 30,
+    "valid_measurements": 30,
+    "expected": 30,
+    "coverage_rate": 1.0
+  },
+  "adherence": {
+    "rate_30d": 1.0,
+    "rate_7d": 1.0,
+    "max_gap_days": 0,
+    "last_measure_date": "2026-01-30",
+    "days_since_last": 0
+  },
+  "bp": {
+    "sys_mean_7d": 141.7,
+    "sys_sd_7d": 4.2,
+    "dia_mean_7d": 87.4,
+    "sys_mean_30d": 150.5,
+    "target_rate_30d": 0.067,
+    "max_single": {
+      "sys": 163,
+      "dia": 90,
+      "date": "2026-01-06"
+    }
+  },
+  "pattern": {
+    "morning_mean": null,
+    "evening_mean": null,
+    "delta": null,
+    "stable_delta": false,
+    "paired_days": 0
+  },
+  "trend": {
+    "slope_per_week": -4.4,
+    "direction": "improving",
+    "compare_14d": -8.4
+  },
+  "activity": {
+    "steps_mean_7d": 6227,
+    "steps_delta": -1197,
+    "hr_mean_7d": 83
+  },
+  "risk_level": "moderate",
+  "state": "IMPROVING",
+  "escalation_required": false,
+  "escalation_action": null,
+  "signals": [
+    "30天依从率100%，近7天100%",
+    "近7天均值142，达标7%",
+    "近14天对比-8",
+    "30天最高收缩压163"
+  ],
+  "required_disclaimers": [
+    "本结果基于家庭自测模拟数据，不做疾病诊断，不改变药物方案，不代替医生。"
+  ],
+  "needs_human": false,
+  "human_route": null
+}
