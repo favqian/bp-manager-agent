@@ -1,0 +1,62 @@
+{
+  "patient_id": "boundary_insufficient",
+  "as_of": "2026-01-30",
+  "sufficient": false,
+  "sufficient_reason": "近30天有效测量不足",
+  "window": {
+    "days": 30,
+    "valid_measurements": 3,
+    "expected": 60,
+    "coverage_rate": 0.05
+  },
+  "adherence": {
+    "rate_30d": 0.05,
+    "rate_7d": 0.0,
+    "max_gap_days": 27,
+    "last_measure_date": "2026-01-03",
+    "days_since_last": 27
+  },
+  "bp": {
+    "sys_mean_7d": null,
+    "sys_sd_7d": null,
+    "dia_mean_7d": null,
+    "sys_mean_30d": 149.3,
+    "target_rate_30d": 0.0,
+    "max_single": {
+      "sys": 151,
+      "dia": 94,
+      "date": "2026-01-02"
+    }
+  },
+  "pattern": {
+    "morning_mean": null,
+    "evening_mean": null,
+    "delta": null,
+    "stable_delta": false,
+    "paired_days": 0
+  },
+  "trend": {
+    "slope_per_week": 3.5,
+    "direction": "unknown",
+    "compare_14d": null
+  },
+  "activity": {
+    "steps_mean_7d": null,
+    "steps_delta": null,
+    "hr_mean_7d": null
+  },
+  "risk_level": "unknown",
+  "state": "INSUFFICIENT_DATA",
+  "escalation_required": false,
+  "escalation_action": null,
+  "signals": [
+    "30天依从率5%，最近27天未测",
+    "近7天有效测量0次",
+    "30天最高收缩压151"
+  ],
+  "required_disclaimers": [
+    "本结果基于家庭自测模拟数据，不做疾病诊断，不改变药物方案，不代替医生。"
+  ],
+  "needs_human": false,
+  "human_route": null
+}

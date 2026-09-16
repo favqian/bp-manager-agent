@@ -62,8 +62,8 @@ def _in_last_n_days(dates: pd.Series, as_of: pd.Timestamp, days: int) -> pd.Seri
     return (delta >= 0) & (delta < days)
 
 
-def load_patient_csv(patient_id: str) -> pd.DataFrame:
-    path = CSV_DIR / f"{patient_id}.csv"
+def load_patient_csv(patient_id: str, csv_path: Path | None = None) -> pd.DataFrame:
+    path = Path(csv_path) if csv_path else CSV_DIR / f"{patient_id}.csv"
     if not path.exists():
         raise FileNotFoundError(f"找不到患者 CSV: {path}")
     df = pd.read_csv(path)
@@ -362,8 +362,12 @@ def _build_signals(
     return signals
 
 
-def assess(patient_id: str, as_of: str | None = None) -> Assessment:
-    df = load_patient_csv(patient_id)
+def assess(
+    patient_id: str,
+    as_of: str | None = None,
+    csv_path: Path | None = None,
+) -> Assessment:
+    df = load_patient_csv(patient_id, csv_path=csv_path)
     as_of_ts = pd.Timestamp(as_of) if as_of else df["date"].max()
     df = df[_in_last_n_days(df["date"], as_of_ts, params.WINDOW.days_30)].copy()
 
