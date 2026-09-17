@@ -53,6 +53,8 @@ def build_messages(
     user_msg: str,
     history: list[dict[str, str]] | None = None,
     scene: Any = None,
+    display_name: str | None = None,
+    action_plan_brief: str | None = None,
 ) -> list[dict[str, str]]:
     """顺序：system → 判读结果 → 策略卡 → 场景说明 → 示例 → 历史 → 用户/推送请求。"""
     from prompts.scenes import format_instruction, get_scene
@@ -78,9 +80,17 @@ def build_messages(
             }
         )
     else:
-        from prompts.intents import CHAT_TURN_INSTRUCTION
+        from prompts.intents import chat_turn_instruction
 
-        messages.append({"role": "user", "content": CHAT_TURN_INSTRUCTION})
+        turn = chat_turn_instruction(user_msg, history, display_name)
+        if action_plan_brief:
+            turn += "\n\n【当前行动计划】\n" + action_plan_brief
+        messages.append(
+            {
+                "role": "user",
+                "content": turn,
+            }
+        )
 
     fewshot_msgs = _fewshot_messages(fewshots)
     if fewshot_msgs:

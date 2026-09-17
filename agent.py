@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 import guard
-from prompts.fewshots import get_fewshots
+from prompts.fewshots import get_conversation_fewshots, get_fewshots
+from prompts.intents import CONV_HEALTH, classify_conversation_intent
 from prompts.loader import build_messages
 from prompts.scenes import get_scene, push_user_msg
 
@@ -153,6 +154,22 @@ def _record_attempt(
     )
 
 
+def _ensure_playbook_disclaimers(reply: dict, playbook: Any) -> dict:
+    """模型过 Guard 后仍补齐策略卡声明，不改 fact/explain/action，不改 G1–G6。"""
+    result = dict(reply)
+    required = list((playbook or {}).get("disclaimers") or [])
+    current = result.get("disclaimers") or []
+    if isinstance(current, str):
+        current = [current]
+    else:
+        current = list(current)
+    for item in required:
+        if item and item not in current:
+            current.append(item)
+    result["disclaimers"] = current
+    return result
+
+
 def _annotate(reply: dict, degraded: bool, reasons: list[str]) -> dict:
     result = dict(reply)
     result["degraded"] = degraded
@@ -179,17 +196,28 @@ def chat(
     user_msg: str,
     history: list[dict[str, str]] | None = None,
     scene: str | None = None,
+    display_name: str | None = None,
+    action_plan_brief: str | None = None,
 ) -> dict:
     """组装 Prompt → 调模型 → guard.validate；失败则重试 1 次，再失败则 fallback。"""
     recent = list(history or [])[-HISTORY_LIMIT:]
     state = getattr(assessment, "state", None)
+    conv = classify_conversation_intent(user_msg, recent)
+    if scene:
+        fewshots = get_fewshots(state) if state else []
+    elif conv != CONV_HEALTH:
+        fewshots = get_conversation_fewshots(conv)
+    else:
+        fewshots = get_fewshots(state) if state else []
     messages = build_messages(
         assessment_json=assessment,
         playbook=playbook,
-        fewshots=get_fewshots(state) if state else [],
+        fewshots=fewshots,
         user_msg=user_msg,
         history=recent,
         scene=scene,
+        display_name=display_name,
+        action_plan_brief=action_plan_brief,
     )
 
     _reset_turn_trace()
@@ -206,6 +234,7 @@ def chat(
             ok, last_reasons = guard.validate(reply, assessment)
             _record_attempt(attempt, last_raw, ok, [] if ok else last_reasons)
             if ok:
+                reply = _ensure_playbook_disclaimers(reply, playbook)
                 result = _annotate(reply, False, [])
                 _LAST_TURN_TRACE["degraded"] = False
                 _LAST_TURN_TRACE["fallback_used"] = False
@@ -230,6 +259,7 @@ def chat(
         scene=scene,
         user_query=user_msg,
         history=recent,
+        display_name=display_name,
     )
     result = _annotate(fallback_reply, True, last_reasons)
     _LAST_TURN_TRACE["degraded"] = True

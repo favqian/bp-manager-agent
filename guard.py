@@ -336,12 +336,12 @@ def inspect(reply: dict, assessment: Assessment) -> list[dict]:
 # 把 Playbook.must_do 落到行动层短句。说明类 must_do 放 fact，不在这里重复。
 _MUST_DO_ACTION = {
     "提示规范复测确认": "先复测一次确认",
-    "建议连续记录并带给医生": "把晨晚差记录下来带去复诊",
+    "建议连续记录并带给医生": "把早晚记录留下来带去复诊",
     "强调不自行调整用药": "用药别自己改",
-    "建议记录并在复诊时提出": "把近窗记录下来，复诊时提出",
-    "给一个极低门槛动作：今天测一次就够": "今天测一次就行",
-    "只请求一个最小动作：测一次": "今天测一次就行",
-    "给一个维持动作": "照现在这样测就行",
+    "建议记录并在复诊时提出": "把这阵子记录留好，复诊时提出",
+    "给一个极低门槛动作：今天测一次就够": "今天测一次就好",
+    "只请求一个最小动作：测一次": "今天测一次就好",
+    "给一个维持动作": "照现在这样测就好",
 }
 
 
@@ -386,12 +386,15 @@ def fallback(
     scene: str | None = None,
     user_query: str | None = None,
     history: list[dict[str, str]] | None = None,
+    display_name: str | None = None,
 ) -> dict:
     """不调模型。推送看 scene；自由对话看 user_query；否则保持原 State 模板。"""
     if scene:
         return _fallback_with_scene(assessment, playbook, scene)
     if user_query:
-        return _fallback_with_query(assessment, playbook, user_query, history)
+        return _fallback_with_query(
+            assessment, playbook, user_query, history, display_name
+        )
     return _fallback_state_only(assessment, playbook)
 
 
@@ -426,7 +429,7 @@ def _must_do_patch(item: str, assessment: Assessment) -> str:
         mean = assessment.bp.get("sys_mean_7d")
         rate = assessment.bp.get("target_rate_30d")
         if mean is not None and rate is not None:
-            return f"近7天均值{float(mean):.0f}，达标{float(rate):.0%}。"
+            return f"这周高压平均{float(mean):.0f}。最近测到的高压大多还在参考线以上。"
     if "晨晚差异" in item:
         from prompts.scenes import pattern_values_fact
 
@@ -434,7 +437,7 @@ def _must_do_patch(item: str, assessment: Assessment) -> str:
     if "下降幅度" in item or "近14天" in item:
         compare = assessment.trend.get("compare_14d")
         if compare is not None:
-            return f"近14天对比{float(compare):+.0f}。"
+            return f"近两周对比{float(compare):+.0f}。"
     return ""
 
 
@@ -445,13 +448,18 @@ def _apply_safety_overlay(
     explain: str,
     action: str,
     extra_disclaimers: list[str] | None = None,
+    skip_escalation_prompt: bool = False,
 ) -> dict:
     blob = fact + explain + action
-    if assessment.sufficient is False and "数据不足" not in blob:
+    if (
+        assessment.sufficient is False
+        and "数据不足" not in blob
+        and not skip_escalation_prompt
+    ):
         fact = "目前数据不足，我无法判断趋势。" + fact
         blob = fact + explain + action
 
-    if assessment.escalation_required:
+    if assessment.escalation_required and not skip_escalation_prompt:
         phrase = _ESCALATION_PHRASE.get(
             assessment.escalation_action or "",
             "尽快就医",
@@ -459,20 +467,21 @@ def _apply_safety_overlay(
         action = _overlay_action(action, phrase)
         blob = fact + explain + action
         if "读数" not in blob:
-            explain = explain + "有一次读数要看。"
+            explain = explain + "这次读数需要优先看。"
             blob = fact + explain + action
         if "复测" not in blob:
-            explain = explain + "先复测确认。"
+            explain = explain + "先复测一次确认。"
             blob = fact + explain + action
 
-    for item in (playbook or {}).get("must_do") or []:
-        missed = _check_must_do_item(item, blob, assessment)
-        if not missed:
-            continue
-        extra = _must_do_patch(item, assessment)
-        if extra and extra not in blob:
-            explain = explain + extra
-            blob = fact + explain + action
+    if not skip_escalation_prompt:
+        for item in (playbook or {}).get("must_do") or []:
+            missed = _check_must_do_item(item, blob, assessment)
+            if not missed:
+                continue
+            extra = _must_do_patch(item, assessment)
+            if extra and extra not in blob:
+                explain = explain + extra
+                blob = fact + explain + action
 
     disclaimers = list((playbook or {}).get("disclaimers") or [])
     for item in extra_disclaimers or []:
@@ -506,10 +515,11 @@ def _fallback_with_query(
     playbook: dict,
     user_query: str,
     history: list[dict[str, str]] | None,
+    display_name: str | None = None,
 ) -> dict:
     from prompts.intents import query_fallback_draft
 
-    draft = query_fallback_draft(assessment, user_query, history)
+    draft = query_fallback_draft(assessment, user_query, history, display_name)
     return _apply_safety_overlay(
         assessment,
         playbook,
@@ -517,4 +527,5 @@ def _fallback_with_query(
         draft["explain"],
         draft["action"],
         extra_disclaimers=list(draft.get("extra_disclaimers") or []),
+        skip_escalation_prompt=bool(draft.get("skip_escalation_prompt")),
     )
