@@ -91,8 +91,8 @@ class Assessment:
     risk_level: str = "unknown"
     # high / moderate / low / unknown
     # 描述性指标：描述当前数据表现，不直接驱动 Agent 行为
-    state: str = ManagementState.INSUFFICIENT_DATA.value
-    # 管理状态（Agent 行为路由依据）
+    state: str | None = None
+    # 最终管理状态由 state.py decide_state() 回填，rules.py 不写死
 
     escalation_required: bool = False
     # 是否需要专业人员进一步关注/处理（结构化字段）

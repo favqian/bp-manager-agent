@@ -305,29 +305,62 @@ def validate(reply: dict, assessment: Assessment) -> tuple[bool, list[str]]:
     return (not reasons), reasons
 
 
-def fallback(assessment: Assessment, playbook: dict) -> dict:
-    """不调模型：用策略卡 opening 和 signals 拼一段确定性 JSON。"""
-    opening = str((playbook or {}).get("opening") or "").strip()
+# 把 Playbook.must_do 落到行动层短句。说明类 must_do 放 fact，不在这里重复。
+_MUST_DO_ACTION = {
+    "提示规范复测确认": "先复测一次确认",
+    "建议连续记录并带给医生": "把晨晚差记录下来带去复诊",
+    "强调不自行调整用药": "用药别自己改",
+    "建议记录并在复诊时提出": "把近窗记录下来，复诊时提出",
+    "给一个极低门槛动作：今天测一次就够": "今天测一次就行",
+    "只请求一个最小动作：测一次": "今天测一次就行",
+    "给一个维持动作": "照现在这样测就行",
+}
+
+
+def _fallback_fact(assessment: Assessment, playbook: dict, opening: str) -> str:
     signals = [str(item).strip() for item in (assessment.signals or []) if str(item).strip()]
-    fact = "；".join(signals) if signals else opening
+    body = "；".join(signals) if signals else opening
+    if assessment.sufficient is False:
+        # 短声明放在事实层，长免责不进 disclaimers。
+        prefix = "目前数据不足，我无法判断趋势。"
+        return prefix if not body else f"{prefix}{body}"
+    return body or opening
+
+
+def _fallback_action(assessment: Assessment, playbook: dict, opening: str) -> str:
+    # MONITORING_GAP / INSUFFICIENT_DATA / 升级路径保持原策略，只把其余状态接到 must_do。
     if assessment.escalation_required:
         phrase = _ESCALATION_PHRASE.get(
             assessment.escalation_action or "",
             "尽快就医",
         )
-        action = f"{phrase}。先复测一次确认。"
-    elif assessment.sufficient is False:
-        action = "今天测一次就行。"
-    elif assessment.state == "MONITORING_GAP":
-        action = "今天早起后测一次就行。"
-    elif assessment.state == "SUSTAINED_HIGH":
-        action = "记下来，复诊时提出。"
-    else:
-        action = opening or "今天测一次就行。"
+        return f"{phrase}。先复测一次确认。"
+    if assessment.sufficient is False:
+        return "今天测一次就行。"
+    if assessment.state == "MONITORING_GAP":
+        return "今天早起后测一次就行。"
+
+    fragments: list[str] = []
+    for item in (playbook or {}).get("must_do") or []:
+        phrase = _MUST_DO_ACTION.get(str(item).strip())
+        if phrase and phrase not in fragments:
+            fragments.append(phrase)
+        if len(fragments) == 2:
+            break
+    if not fragments:
+        return opening or "今天测一次就行。"
+    return "。".join(fragments) + "。"
+
+
+def fallback(assessment: Assessment, playbook: dict) -> dict:
+    """不调模型：opening + signals 出事实，must_do 出行动，短声明用策略卡标签。"""
+    opening = str((playbook or {}).get("opening") or "").strip()
+    fact = _fallback_fact(assessment, playbook, opening)
+    action = _fallback_action(assessment, playbook, opening)
     return {
         "fact": fact or opening,
         "explain": opening or fact,
         "action": action,
         "escalation_action": assessment.escalation_action,
-        "disclaimers": list(assessment.required_disclaimers or []),
+        "disclaimers": list((playbook or {}).get("disclaimers") or []),
     }

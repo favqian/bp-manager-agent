@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 import params
-from contract import Assessment, ManagementState
+from contract import Assessment
 
 BASE_DIR = Path(__file__).parent
 CSV_DIR = BASE_DIR / "data" / "patients"
@@ -268,32 +268,6 @@ def _risk_level(
     return "moderate"
 
 
-def _resolve_state(
-    sufficient: bool,
-    rate_7d: float | None,
-    days_since_last: int | None,
-    stable_delta: bool,
-    direction: str,
-    sys_mean_7d: float | None,
-    crisis: bool,
-) -> str:
-    if not sufficient:
-        return ManagementState.INSUFFICIENT_DATA.value
-    if rate_7d is not None and rate_7d < params.STATE.monitoring_gap_rate:
-        return ManagementState.MONITORING_GAP.value
-    if days_since_last is not None and days_since_last > params.STATE.monitoring_gap_days:
-        return ManagementState.MONITORING_GAP.value
-    if stable_delta:
-        return ManagementState.MORNING_SURGE.value
-    if direction == "improving":
-        return ManagementState.IMPROVING.value
-    if sys_mean_7d is not None and sys_mean_7d >= params.RISK.moderate_sys_low:
-        return ManagementState.SUSTAINED_HIGH.value
-    if crisis:
-        return ManagementState.ESCALATION_REQUIRED.value
-    return ManagementState.STABLE_MAINTAIN.value
-
-
 def _add_signal(signals: list[str], text: str) -> None:
     if not text or not _has_digit(text):
         return
@@ -420,15 +394,6 @@ def assess(
     risk_level = _risk_level(
         sufficient, sys_mean_7d, sys_sd_7d, target_rate_30d, crisis
     )
-    state = _resolve_state(
-        sufficient,
-        rate_7d,
-        days_since_last,
-        bool(pattern["stable_delta"]),
-        trend["direction"],
-        sys_mean_7d,
-        crisis,
-    )
 
     if crisis:
         escalation_required = True
@@ -482,7 +447,7 @@ def assess(
         trend=trend,
         activity=activity,
         risk_level=risk_level,
-        state=state,
+        state=None,
         escalation_required=escalation_required,
         escalation_action=escalation_action,
         signals=signals,

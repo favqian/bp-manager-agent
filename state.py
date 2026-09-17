@@ -31,6 +31,12 @@ _AUX_RISK_SIGNALS = frozenset({"high", "moderate"})
 _TREND_IMPROVING = "improving"
 
 
+def apply_state(a: Assessment, p=params) -> Assessment:
+    """把 decide_state 的结果回填到 Assessment.state。这是最终 Agent 路由状态的唯一写入点。"""
+    a.state = decide_state(a, p)
+    return a
+
+
 def decide_state(a: Assessment, p=params) -> str:
     """按优先级把 Assessment 路由到管理状态。阈值只读 params.STATE。"""
     if a.escalation_required:
@@ -185,8 +191,8 @@ def get_playbook(state: str) -> dict:
 def main() -> None:
     rows = []
     for patient_id in DEMO_PATIENTS:
-        assessment = assess(patient_id)
-        state = decide_state(assessment)
+        assessment = apply_state(assess(patient_id))
+        state = assessment.state
         card = get_playbook(state)
         print("=" * 60)
         print(f"{patient_id}  →  {state}")
