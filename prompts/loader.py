@@ -52,8 +52,11 @@ def build_messages(
     fewshots: list | None,
     user_msg: str,
     history: list[dict[str, str]] | None = None,
+    scene: Any = None,
 ) -> list[dict[str, str]]:
-    """顺序：【system】→【判读结果JSON】→【当前状态策略卡】→【示例】→【历史】→【用户消息】。"""
+    """顺序：system → 判读结果 → 策略卡 → 场景说明 → 示例 → 历史 → 用户/推送请求。"""
+    from prompts.scenes import format_instruction, get_scene
+
     messages: list[dict[str, str]] = [
         {"role": "system", "content": load_system()},
         {
@@ -65,6 +68,19 @@ def build_messages(
             "content": "【当前状态策略卡】\n" + _as_json_text(playbook),
         },
     ]
+
+    scene_card = get_scene(scene) if isinstance(scene, str) else scene
+    if scene_card:
+        messages.append(
+            {
+                "role": "user",
+                "content": "【本次场景说明】\n" + format_instruction(scene_card),
+            }
+        )
+    else:
+        from prompts.intents import CHAT_TURN_INSTRUCTION
+
+        messages.append({"role": "user", "content": CHAT_TURN_INSTRUCTION})
 
     fewshot_msgs = _fewshot_messages(fewshots)
     if fewshot_msgs:

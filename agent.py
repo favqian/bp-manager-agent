@@ -14,17 +14,26 @@ from openai import OpenAI
 import guard
 from prompts.fewshots import get_fewshots
 from prompts.loader import build_messages
+from prompts.scenes import get_scene, push_user_msg
 
 ROOT = Path(__file__).resolve().parent
 ENV_PATH = ROOT / ".env"
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
 
 BASE_URL = "https://api.deepseek.com"
-MODEL = "deepseek-chat"
+MODEL = "deepseek-flash"
 TEMPERATURE = 0.3
 MAX_TOKENS = 500
+THINKING = {"type": "disabled"}
 HISTORY_LIMIT = 6
 MAX_ATTEMPTS = 2
+_LAST_RESPONSE_MODEL: str | None = None
+_LAST_TURN_TRACE: dict[str, Any] = {
+    "attempts": [],
+    "degraded": False,
+    "fallback_used": False,
+    "final_reply": None,
+}
 
 
 def _read_key() -> str:
@@ -50,15 +59,30 @@ def _client() -> OpenAI:
 
 
 def _call_model(messages: list[dict[str, str]]) -> str:
-    """唯一的模型调用点。"""
+    """唯一的模型调用点。Non-Thinking：thinking.type=disabled，temperature 才生效。"""
+    global _LAST_RESPONSE_MODEL
     response = _client().chat.completions.create(
         model=MODEL,
         temperature=TEMPERATURE,
         max_tokens=MAX_TOKENS,
         messages=messages,
+        extra_body={"thinking": dict(THINKING)},
     )
+    _LAST_RESPONSE_MODEL = getattr(response, "model", None)
     content = response.choices[0].message.content
     return content or ""
+
+
+def describe_runtime() -> dict[str, Any]:
+    """不打印 key。供 debug/test 确认实际命中的模型。"""
+    return {
+        "requested_model": MODEL,
+        "response_model": _LAST_RESPONSE_MODEL,
+        "base_url": BASE_URL,
+        "thinking": THINKING.get("type"),
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
 
 
 def _parse_reply(raw: str) -> dict | None:
@@ -80,6 +104,55 @@ def _parse_reply(raw: str) -> dict | None:
         return payload if isinstance(payload, dict) else None
 
 
+def _public_trace_reply(reply: dict) -> dict[str, Any]:
+    return {
+        "fact": reply.get("fact"),
+        "explain": reply.get("explain"),
+        "action": reply.get("action"),
+        "escalation_action": reply.get("escalation_action"),
+        "disclaimers": reply.get("disclaimers") or [],
+    }
+
+
+def _reset_turn_trace() -> None:
+    global _LAST_TURN_TRACE
+    _LAST_TURN_TRACE = {
+        "attempts": [],
+        "degraded": False,
+        "fallback_used": False,
+        "final_reply": None,
+    }
+
+
+def take_turn_trace() -> dict[str, Any]:
+    """评测读取本轮 attempts；不进入产品回复，不包含 API Key。"""
+    global _LAST_TURN_TRACE
+    snapshot = {
+        "attempts": list(_LAST_TURN_TRACE.get("attempts") or []),
+        "degraded": bool(_LAST_TURN_TRACE.get("degraded")),
+        "fallback_used": bool(_LAST_TURN_TRACE.get("fallback_used")),
+        "final_reply": _LAST_TURN_TRACE.get("final_reply"),
+    }
+    _reset_turn_trace()
+    return snapshot
+
+
+def _record_attempt(
+    attempt: int,
+    raw_model_reply: str,
+    guard_ok: bool,
+    guard_reasons: list[str],
+) -> None:
+    _LAST_TURN_TRACE["attempts"].append(
+        {
+            "attempt": attempt,
+            "raw_model_reply": raw_model_reply,
+            "guard_ok": guard_ok,
+            "guard_reasons": list(guard_reasons),
+        }
+    )
+
+
 def _annotate(reply: dict, degraded: bool, reasons: list[str]) -> dict:
     result = dict(reply)
     result["degraded"] = degraded
@@ -87,11 +160,25 @@ def _annotate(reply: dict, degraded: bool, reasons: list[str]) -> dict:
     return result
 
 
+def generate_push(assessment: Any, playbook: Any, scene: str) -> dict:
+    """场景推送：页面只传 scene，Prompt 由场景层组装。"""
+    if get_scene(scene) is None:
+        raise KeyError(f"未知场景: {scene}")
+    return chat(
+        assessment=assessment,
+        playbook=playbook,
+        user_msg=push_user_msg(scene),
+        history=[],
+        scene=scene,
+    )
+
+
 def chat(
     assessment: Any,
     playbook: Any,
     user_msg: str,
     history: list[dict[str, str]] | None = None,
+    scene: str | None = None,
 ) -> dict:
     """组装 Prompt → 调模型 → guard.validate；失败则重试 1 次，再失败则 fallback。"""
     recent = list(history or [])[-HISTORY_LIMIT:]
@@ -102,8 +189,10 @@ def chat(
         fewshots=get_fewshots(state) if state else [],
         user_msg=user_msg,
         history=recent,
+        scene=scene,
     )
 
+    _reset_turn_trace()
     last_reasons = ["G1 JSON 结构不完整"]
     last_raw = ""
     attempt_messages = list(messages)
@@ -112,10 +201,16 @@ def chat(
         reply = _parse_reply(last_raw)
         if reply is None:
             last_reasons = ["G1 JSON 结构不完整：无法解析模型输出"]
+            _record_attempt(attempt, last_raw, False, last_reasons)
         else:
             ok, last_reasons = guard.validate(reply, assessment)
+            _record_attempt(attempt, last_raw, ok, [] if ok else last_reasons)
             if ok:
-                return _annotate(reply, False, [])
+                result = _annotate(reply, False, [])
+                _LAST_TURN_TRACE["degraded"] = False
+                _LAST_TURN_TRACE["fallback_used"] = False
+                _LAST_TURN_TRACE["final_reply"] = _public_trace_reply(result)
+                return result
         if attempt < MAX_ATTEMPTS:
             attempt_messages = messages + [
                 {"role": "assistant", "content": last_raw},
@@ -129,5 +224,15 @@ def chat(
                 },
             ]
 
-    fallback_reply = guard.fallback(assessment, playbook)
-    return _annotate(fallback_reply, True, last_reasons)
+    fallback_reply = guard.fallback(
+        assessment,
+        playbook,
+        scene=scene,
+        user_query=user_msg,
+        history=recent,
+    )
+    result = _annotate(fallback_reply, True, last_reasons)
+    _LAST_TURN_TRACE["degraded"] = True
+    _LAST_TURN_TRACE["fallback_used"] = True
+    _LAST_TURN_TRACE["final_reply"] = _public_trace_reply(result)
+    return result

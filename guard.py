@@ -305,6 +305,34 @@ def validate(reply: dict, assessment: Assessment) -> tuple[bool, list[str]]:
     return (not reasons), reasons
 
 
+def inspect(reply: dict, assessment: Assessment) -> list[dict]:
+    """Debug 用：逐项跑 G1–G6，不改变 validate 的短路逻辑。"""
+    g1 = _g1_structure(reply)
+    g2 = _g2_facts(reply, assessment)
+    g3 = _g3_banned(reply)
+    g4a = _g4a_strategy(reply, assessment)
+    g4b = _g4b_escalation(reply, assessment)
+    g5 = _g5_single_action(reply)
+    g6 = _g6_length(reply)
+    return [
+        {"id": "G1", "name": "JSON 结构", "ok": not g1, "reasons": g1},
+        {"id": "G2", "name": "事实值", "ok": not g2, "reasons": g2},
+        {"id": "G3", "name": "违禁词", "ok": not g3, "reasons": g3},
+        {"id": "G4a", "name": "策略一致", "ok": not g4a, "reasons": g4a},
+        {
+            "id": "G4b",
+            "name": "升级动作",
+            "ok": not g4b,
+            "reasons": g4b,
+            "expected": assessment.escalation_action,
+            "actual": reply.get("escalation_action") if isinstance(reply, dict) else None,
+            "escalation_required": bool(assessment.escalation_required),
+        },
+        {"id": "G5", "name": "单一行动", "ok": not g5, "reasons": g5},
+        {"id": "G6", "name": "长度", "ok": not g6, "reasons": g6},
+    ]
+
+
 # 把 Playbook.must_do 落到行动层短句。说明类 must_do 放 fact，不在这里重复。
 _MUST_DO_ACTION = {
     "提示规范复测确认": "先复测一次确认",
@@ -352,8 +380,23 @@ def _fallback_action(assessment: Assessment, playbook: dict, opening: str) -> st
     return "。".join(fragments) + "。"
 
 
-def fallback(assessment: Assessment, playbook: dict) -> dict:
-    """不调模型：opening + signals 出事实，must_do 出行动，短声明用策略卡标签。"""
+def fallback(
+    assessment: Assessment,
+    playbook: dict,
+    scene: str | None = None,
+    user_query: str | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> dict:
+    """不调模型。推送看 scene；自由对话看 user_query；否则保持原 State 模板。"""
+    if scene:
+        return _fallback_with_scene(assessment, playbook, scene)
+    if user_query:
+        return _fallback_with_query(assessment, playbook, user_query, history)
+    return _fallback_state_only(assessment, playbook)
+
+
+def _fallback_state_only(assessment: Assessment, playbook: dict) -> dict:
+    """原对话降级：opening + signals 出事实，must_do 出行动。eval 路径走这里。"""
     opening = str((playbook or {}).get("opening") or "").strip()
     fact = _fallback_fact(assessment, playbook, opening)
     action = _fallback_action(assessment, playbook, opening)
@@ -364,3 +407,114 @@ def fallback(assessment: Assessment, playbook: dict) -> dict:
         "escalation_action": assessment.escalation_action,
         "disclaimers": list((playbook or {}).get("disclaimers") or []),
     }
+
+
+def _overlay_action(action: str, extra: str) -> str:
+    parts = [part.strip("。；; ") for part in _ACTION_SPLIT_RE.split(action) if part.strip()]
+    extra = extra.strip("。；; ")
+    if extra and extra not in "".join(parts):
+        if len(parts) >= 2:
+            parts[-1] = extra
+        else:
+            parts.append(extra)
+    return "。".join(parts[:2]) + "。" if parts else extra + "。"
+
+
+def _must_do_patch(item: str, assessment: Assessment) -> str:
+    """把 G4a 仍缺的 must_do 落成短句，数字只引用 Assessment。"""
+    if "均值" in item and "达标" in item:
+        mean = assessment.bp.get("sys_mean_7d")
+        rate = assessment.bp.get("target_rate_30d")
+        if mean is not None and rate is not None:
+            return f"近7天均值{float(mean):.0f}，达标{float(rate):.0%}。"
+    if "晨晚差异" in item:
+        from prompts.scenes import pattern_values_fact
+
+        return pattern_values_fact(assessment)
+    if "下降幅度" in item or "近14天" in item:
+        compare = assessment.trend.get("compare_14d")
+        if compare is not None:
+            return f"近14天对比{float(compare):+.0f}。"
+    return ""
+
+
+def _apply_safety_overlay(
+    assessment: Assessment,
+    playbook: dict,
+    fact: str,
+    explain: str,
+    action: str,
+    extra_disclaimers: list[str] | None = None,
+) -> dict:
+    blob = fact + explain + action
+    if assessment.sufficient is False and "数据不足" not in blob:
+        fact = "目前数据不足，我无法判断趋势。" + fact
+        blob = fact + explain + action
+
+    if assessment.escalation_required:
+        phrase = _ESCALATION_PHRASE.get(
+            assessment.escalation_action or "",
+            "尽快就医",
+        )
+        action = _overlay_action(action, phrase)
+        blob = fact + explain + action
+        if "读数" not in blob:
+            explain = explain + "有一次读数要看。"
+            blob = fact + explain + action
+        if "复测" not in blob:
+            explain = explain + "先复测确认。"
+            blob = fact + explain + action
+
+    for item in (playbook or {}).get("must_do") or []:
+        missed = _check_must_do_item(item, blob, assessment)
+        if not missed:
+            continue
+        extra = _must_do_patch(item, assessment)
+        if extra and extra not in blob:
+            explain = explain + extra
+            blob = fact + explain + action
+
+    disclaimers = list((playbook or {}).get("disclaimers") or [])
+    for item in extra_disclaimers or []:
+        if item not in disclaimers:
+            disclaimers.append(item)
+
+    return {
+        "fact": fact.strip(),
+        "explain": explain.strip(),
+        "action": action.strip(),
+        "escalation_action": assessment.escalation_action,
+        "disclaimers": disclaimers,
+    }
+
+
+def _fallback_with_scene(assessment: Assessment, playbook: dict, scene: str) -> dict:
+    from prompts.scenes import fallback_draft
+
+    draft = fallback_draft(assessment, scene)
+    return _apply_safety_overlay(
+        assessment,
+        playbook,
+        draft["fact"],
+        draft["explain"],
+        draft["action"],
+    )
+
+
+def _fallback_with_query(
+    assessment: Assessment,
+    playbook: dict,
+    user_query: str,
+    history: list[dict[str, str]] | None,
+) -> dict:
+    from prompts.intents import query_fallback_draft
+
+    draft = query_fallback_draft(assessment, user_query, history)
+    return _apply_safety_overlay(
+        assessment,
+        playbook,
+        draft["fact"],
+        draft["explain"],
+        draft["action"],
+        extra_disclaimers=list(draft.get("extra_disclaimers") or []),
+    )

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent import chat, check_config
+from agent import chat, check_config, take_turn_trace
 from guard import (
     _ACTION_SPLIT_RE,
     _check_must_do_item,
@@ -50,7 +50,13 @@ LABELED_FACT = (
     ("达标", ("bp", "target_rate_30d")),
     ("晨间", ("pattern", "morning_mean")),
     ("晚间", ("pattern", "evening_mean")),
-    ("差", ("pattern", "delta")),
+)
+# 仅当文本明确写出差值数字时才校验 delta。
+# 「晨晚差」「晨晚差异」这类动作/现象名不构成数值陈述。
+_DELTA_CLAIM_RE = re.compile(
+    r"(?:晨晚相差|早晚相差|晨晚差|早晚差|相差|差值|差)"
+    r"\s*(?:是|为|约)?\s*"
+    r"([+-]?\d+(?:\.\d+)?)"
 )
 
 
@@ -155,6 +161,49 @@ def _dig(payload: dict, path: tuple[str, ...]):
     return current
 
 
+def extract_delta_claims(text: str) -> list[float]:
+    """抽出「声明了一个差值」的数字。无数字的「晨晚差」不会命中。"""
+    return [float(match.group(1)) for match in _DELTA_CLAIM_RE.finditer(text or "")]
+
+
+def _assessment_payload(assessment) -> dict:
+    return {
+        "bp": assessment.bp,
+        "adherence": assessment.adherence,
+        "pattern": assessment.pattern,
+    }
+
+
+def count_labeled_fact_errors(
+    blob: str,
+    payload: dict,
+    allowed: set[float],
+) -> int:
+    """标签-数值核对。delta 只在出现明确差值陈述时计数。"""
+    fact_err = 0
+    for label, path in LABELED_FACT:
+        expected = _dig(payload, path)
+        if expected is None or label not in blob:
+            continue
+        if not _close_to_allowed(float(expected), allowed):
+            continue
+        mentioned = _extract_fact_numbers(blob)
+        field_allowed = _expand_allowed({float(expected)})
+        if mentioned and not any(_close_to_allowed(n, field_allowed) for n in mentioned):
+            fact_err += 1
+
+    expected_delta = _dig(payload, ("pattern", "delta"))
+    if expected_delta is None:
+        return fact_err
+    if not _close_to_allowed(float(expected_delta), allowed):
+        return fact_err
+    field_allowed = _expand_allowed({float(expected_delta)})
+    for claimed in extract_delta_claims(blob):
+        if not _close_to_allowed(claimed, field_allowed):
+            fact_err += 1
+    return fact_err
+
+
 def score_judge(case: dict, assessment, last: dict, notes: list[str]) -> dict[str, float | None]:
     last_blob = _blob(last)
     state_ok = assessment.state == case["expected_state"]
@@ -234,11 +283,7 @@ def score_reliability(
     notes: list[str],
 ) -> dict[str, float]:
     allowed = _expand_allowed(assessment.fact_values())
-    payload = {
-        "bp": assessment.bp,
-        "adherence": assessment.adherence,
-        "pattern": assessment.pattern,
-    }
+    payload = _assessment_payload(assessment)
     halluc = 0
     fact_err = 0
     for reply in replies:
@@ -249,16 +294,7 @@ def score_reliability(
             if not _close_to_allowed(number, allowed)
         ]
         halluc += len(extras)
-        for label, path in LABELED_FACT:
-            expected = _dig(payload, path)
-            if expected is None or label not in blob:
-                continue
-            if not _close_to_allowed(float(expected), allowed):
-                continue
-            mentioned = _extract_fact_numbers(blob)
-            field_allowed = _expand_allowed({float(expected)})
-            if mentioned and not any(_close_to_allowed(n, field_allowed) for n in mentioned):
-                fact_err += 1
+        fact_err += count_labeled_fact_errors(blob, payload, allowed)
     if halluc:
         notes.append(f"生成/幻觉: {halluc} 个未登记事实数值")
     if fact_err:
@@ -381,9 +417,20 @@ def run_case(case: dict) -> dict:
     replies: list[dict] = []
     degraded = False
     guard_reasons: list[str] = []
+    turns_debug: list[dict] = []
     for user_msg in case["turns"]:
         reply = chat(assessment, playbook, user_msg, history)
         replies.append(reply)
+        trace = take_turn_trace()
+        turns_debug.append(
+            {
+                "user_msg": user_msg,
+                "attempts": trace.get("attempts") or [],
+                "final_reply": trace.get("final_reply") or _public_reply(reply),
+                "degraded": bool(trace.get("degraded", reply.get("degraded"))),
+                "fallback_used": bool(trace.get("fallback_used", reply.get("degraded"))),
+            }
+        )
         degraded = degraded or bool(reply.get("degraded"))
         if reply.get("reasons"):
             guard_reasons = list(reply.get("reasons") or [])
@@ -395,6 +442,7 @@ def run_case(case: dict) -> dict:
             }
         )
     last = replies[-1]
+    last_trace = turns_debug[-1] if turns_debug else {}
     notes: list[str] = []
     judge = score_judge(case, assessment, last, notes)
     gen = score_reliability(case, assessment, replies, last, notes)
@@ -442,6 +490,10 @@ def run_case(case: dict) -> dict:
         "weakest": weakest[0],
         "notes": notes,
         "last_reply": _public_reply(last),
+        "final_reply": last_trace.get("final_reply") or _public_reply(last),
+        "fallback_used": bool(last_trace.get("fallback_used")),
+        "attempts": last_trace.get("attempts") or [],
+        "turns_debug": turns_debug,
     }
 
 
