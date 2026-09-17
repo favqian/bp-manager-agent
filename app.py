@@ -6,11 +6,13 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+import actions
 import agent
 import guard
 from contract import Assessment
+from prompts.fewshots import get_conversation_fewshots, get_fewshots
+from prompts.intents import CONV_HEALTH, classify_conversation_intent
 from prompts.loader import build_messages
-from prompts.fewshots import get_fewshots
 from prompts.scenes import SCENES, push_user_msg
 from rules import assess
 from state import apply_state, get_playbook
@@ -52,13 +54,19 @@ STATE_LABELS = {
 }
 
 WEEK_ACTION = {
-    "ESCALATION_REQUIRED": "尽快就医并复测",
-    "INSUFFICIENT_DATA": "今天测一次",
+    "ESCALATION_REQUIRED": "先复测一次，尽快让医生看",
+    "INSUFFICIENT_DATA": "今天先测一次",
     "MONITORING_GAP": "今天早起后测一次",
-    "MORNING_SURGE": "记录晨晚差，复诊时提出",
-    "SUSTAINED_HIGH": "记录近窗读数，复诊时提出",
+    "MORNING_SURGE": "把早晚记录留下来，复诊时提出",
+    "SUSTAINED_HIGH": "把最近记录留好，复诊时提出",
     "IMPROVING": "继续测量，观察变化",
     "STABLE_MAINTAIN": "保持现有测量习惯",
+}
+
+SCENE_USER_LABELS = {
+    "S1": "测量提醒",
+    "S2": "异常提醒",
+    "S3": "本周总结",
 }
 
 ESCALATION_NL = {
@@ -139,7 +147,7 @@ def build_bp_chart(plot_df: pd.DataFrame) -> alt.Chart:
             tooltip=[
                 alt.Tooltip("date:T", title="日期"),
                 alt.Tooltip("slot:N", title="时段"),
-                alt.Tooltip("systolic_bp:Q", title="收缩压"),
+                alt.Tooltip("systolic_bp:Q", title="高压"),
             ],
         )
     )
@@ -154,7 +162,7 @@ def build_bp_chart(plot_df: pd.DataFrame) -> alt.Chart:
             tooltip=[
                 alt.Tooltip("date:T", title="日期"),
                 alt.Tooltip("slot:N", title="时段"),
-                alt.Tooltip("diastolic_bp:Q", title="舒张压"),
+                alt.Tooltip("diastolic_bp:Q", title="低压"),
             ],
         )
     )
@@ -201,6 +209,23 @@ def format_rate(value) -> str:
     return f"{float(value):.0%}"
 
 
+def _mm(value) -> str | None:
+    if value is None:
+        return None
+    return f"{float(value):.0f}"
+
+
+def _pct_int(value) -> int | None:
+    if value is None:
+        return None
+    return int(round(float(value) * 100))
+
+
+def health_summary(assessment: Assessment) -> dict[str, object]:
+    """理解层。行动层由 ActionPlan / Workspace 负责。"""
+    return actions.health_summary_view(assessment)
+
+
 def compose_coach_text(reply: dict) -> str:
     parts = [reply.get("fact"), reply.get("explain"), reply.get("action")]
     return "\n".join(str(part).strip() for part in parts if part and str(part).strip())
@@ -237,6 +262,7 @@ def init_session() -> None:
         "chat_log": [],
         "llm_history": [],
         "push_cards": {},
+        "action_plans": {},
         "debug_prompt": None,
         "debug_reply": None,
         "debug_guard": None,
@@ -257,21 +283,56 @@ def reset_conversation() -> None:
     st.session_state.debug_scene = None
 
 
+def load_plan(patient_id: str, assessment: Assessment) -> actions.ActionPlan:
+    stored = (st.session_state.action_plans or {}).get(patient_id)
+    expected = actions.build_action_plan(assessment)
+    if stored and stored.get("action_type") == expected.action_type:
+        return actions.ActionPlan.from_dict(stored)
+    st.session_state.action_plans[patient_id] = expected.to_dict()
+    return expected
+
+
+def save_plan(patient_id: str, plan: actions.ActionPlan) -> None:
+    st.session_state.action_plans[patient_id] = plan.to_dict()
+
+
+def apply_plan_event(
+    patient_id: str,
+    plan: actions.ActionPlan,
+    event: str,
+    value: str | None = None,
+) -> actions.ActionPlan:
+    updated = actions.apply_event(plan, event, value)
+    save_plan(patient_id, updated)
+    return updated
+
+
 def call_coach(
     assessment: Assessment,
     playbook: dict,
     user_msg: str,
     history: list[dict[str, str]] | None = None,
     scene: str | None = None,
+    display_name: str | None = None,
+    action_plan: actions.ActionPlan | None = None,
 ) -> dict:
     recent = list(history or [])
+    conv = classify_conversation_intent(user_msg, recent)
+    if scene:
+        fewshots = get_fewshots(assessment.state) if assessment.state else []
+    elif conv != CONV_HEALTH:
+        fewshots = get_conversation_fewshots(conv)
+    else:
+        fewshots = get_fewshots(assessment.state) if assessment.state else []
     messages = build_messages(
         assessment_json=assessment,
         playbook=playbook,
-        fewshots=get_fewshots(assessment.state) if assessment.state else [],
+        fewshots=fewshots,
         user_msg=user_msg,
         history=recent,
         scene=scene,
+        display_name=display_name,
+        action_plan_brief=actions.plan_brief(action_plan) if action_plan and not scene else None,
     )
     st.session_state.debug_prompt = messages
     st.session_state.debug_scene = scene
@@ -284,6 +345,8 @@ def call_coach(
                 playbook=playbook,
                 user_msg=user_msg,
                 history=recent,
+                display_name=display_name,
+                action_plan_brief=actions.plan_brief(action_plan) if action_plan else None,
             )
     except Exception:
         fallback = guard.fallback(
@@ -292,6 +355,7 @@ def call_coach(
             scene=scene,
             user_query=user_msg,
             history=recent,
+            display_name=display_name,
         )
         result = {
             **fallback,
@@ -308,13 +372,15 @@ def render_reply_footer(
     reply: dict,
     family_on: bool,
     patient_name: str,
+    user_facing: bool = True,
 ) -> None:
-    bits = [f"状态：{state_label(assessment.state)}"]
-    if reply.get("degraded"):
-        bits.append("已使用安全模板")
-    st.caption(" · ".join(bits))
+    if not user_facing:
+        bits = [f"状态：{state_label(assessment.state)} · {assessment.state or ''}"]
+        if reply.get("degraded"):
+            bits.append("已使用安全模板")
+        st.caption(" · ".join(bits))
     advice = escalation_text(reply, assessment)
-    if advice:
+    if advice and not user_facing:
         st.caption(advice)
     if family_on:
         st.caption(family_copy(patient_name, reply))
@@ -326,14 +392,20 @@ def render_push_card(
     assessment: Assessment,
     family_on: bool,
     patient_name: str,
+    user_facing: bool = True,
 ) -> None:
     scene = SCENES[scene_id]
+    title = SCENE_USER_LABELS.get(scene_id, scene["label"])
     with st.container(border=True):
-        st.markdown(f"**{scene_id} {scene['label']}**")
-        st.caption(f"触发场景：{scene_id} {scene['label']}")
-        st.caption(f"当前管理状态：{state_label(assessment.state)}")
+        st.markdown(f"**{title}**")
         st.write(compose_coach_text(card))
-        render_reply_footer(assessment, card, family_on, patient_name)
+        render_reply_footer(
+            assessment,
+            card,
+            family_on,
+            patient_name,
+            user_facing=user_facing,
+        )
 
 
 def inject_styles() -> None:
@@ -353,7 +425,7 @@ def inject_styles() -> None:
           }
           .kpi-row {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 12px;
             margin: 4px 0 18px;
           }
@@ -383,12 +455,10 @@ def inject_styles() -> None:
 
 
 def render_kpis(assessment: Assessment) -> None:
-    state = assessment.state
     items = [
-        ("当前管理状态", state_label(state)),
-        ("7日均值", format_mean(assessment)),
+        ("当前情况", state_label(assessment.state)),
+        ("这周平均血压", format_mean(assessment)),
         ("本周测量完成度", format_rate(assessment.adherence.get("rate_7d"))),
-        ("本周行动", WEEK_ACTION.get(state or "", "按提醒测量")),
     ]
     cards = "".join(
         f'<div class="kpi"><div class="kpi-label">{label}</div>'
@@ -405,56 +475,18 @@ def render_user_view(
     playbook: dict,
     family_on: bool,
 ) -> None:
-    state = assessment.state
+    patient_id = patient["patient_id"]
+    plan = load_plan(patient_id, assessment)
     render_kpis(assessment)
 
     st.subheader("30 天血压趋势")
-    st.caption("红色：收缩压　蓝色：舒张压　灰色虚线：Demo 参考线 140 / 90　漏测处断线，不插值、不平滑")
+    st.caption("红色：高压　蓝色：低压　灰色虚线：Demo 参考线 140 / 90　漏测处断线、不插值、不平滑")
     st.altair_chart(build_bp_chart(plot_df), width="stretch")
 
-    st.subheader("场景推送")
-    st.markdown(
-        '<p class="scene-hint">生成的是演示推送卡片，不会发送真实消息。</p>',
-        unsafe_allow_html=True,
-    )
-    b1, b2, b3 = st.columns(3)
-    clicked = None
-    with b1:
-        if st.button("S1 依从提醒", width="stretch"):
-            clicked = "S1"
-    with b2:
-        if st.button("S2 异常响应", width="stretch"):
-            clicked = "S2"
-    with b3:
-        if st.button("S3 周度总结", width="stretch"):
-            clicked = "S3"
-    if clicked:
-        scene = SCENES[clicked]
-        with st.spinner(f"正在生成 {clicked} {scene['label']}…"):
-            card = call_coach(
-                assessment,
-                playbook,
-                push_user_msg(clicked),
-                history=[],
-                scene=clicked,
-            )
-        st.session_state.push_cards[clicked] = card
-
-    cards = st.session_state.push_cards
-    if cards:
-        for scene_id in ("S1", "S2", "S3"):
-            if scene_id in cards:
-                render_push_card(
-                    scene_id,
-                    cards[scene_id],
-                    assessment,
-                    family_on,
-                    patient["short_name"],
-                )
-    else:
-        st.caption("选择上方场景，生成一条推送卡片。")
-
     st.subheader("AI 教练")
+    render_summary(assessment)
+    plan = render_workspace(patient_id, assessment, plan)
+
     for item in st.session_state.chat_log:
         with st.chat_message(item["role"]):
             st.write(item["content"])
@@ -464,21 +496,39 @@ def render_user_view(
                     item.get("reply") or {},
                     family_on,
                     patient["short_name"],
+                    user_facing=True,
                 )
-
-    render_summary(assessment, playbook)
 
     prompt = st.chat_input("和健康教练说一句…")
     if prompt:
         st.session_state.chat_log.append({"role": "user", "content": prompt, "reply": None})
-        with st.spinner("教练正在回复…"):
-            result = call_coach(
-                assessment,
-                playbook,
-                prompt,
-                history=st.session_state.llm_history,
-                scene=None,
-            )
+        event = actions.classify_execution_event(prompt, plan)
+        if event:
+            plan = apply_plan_event(patient_id, plan, event)
+            if event == "visit_ready" and not plan.handoff_text:
+                plan = apply_plan_event(
+                    patient_id,
+                    plan,
+                    "generate_handoff",
+                    actions.build_visit_summary(assessment),
+                )
+            result = {
+                **actions.execution_reply(plan, event),
+                "escalation_action": assessment.escalation_action,
+                "disclaimers": [],
+                "degraded": False,
+            }
+        else:
+            with st.spinner("教练正在回复…"):
+                result = call_coach(
+                    assessment,
+                    playbook,
+                    prompt,
+                    history=st.session_state.llm_history,
+                    scene=None,
+                    display_name=patient["short_name"],
+                    action_plan=plan,
+                )
         payload = reply_payload(result)
         st.session_state.llm_history.extend(
             [
@@ -496,27 +546,139 @@ def render_user_view(
         st.rerun()
 
 
-def render_summary(assessment: Assessment, playbook: dict) -> None:
-    st.subheader("健康总结")
+def render_summary(assessment: Assessment) -> None:
+    summary = health_summary(assessment)
+    st.markdown("**本周健康总结**")
+    st.caption("AI 帮我理解")
+    st.markdown("**这周最值得关注**")
+    st.write(str(summary.get("insight") or ""))
+    st.markdown("**为什么这么判断**")
+    for item in summary.get("evidence") or []:
+        st.markdown(f"- {item}")
+
+
+def render_workspace(
+    patient_id: str,
+    assessment: Assessment,
+    plan: actions.ActionPlan,
+) -> actions.ActionPlan:
+    st.markdown(f"**{plan.title}**")
+    st.caption("AI 接下来帮你做")
+    with st.container(border=True):
+        if plan.action_type == actions.RESTORE_ROUTINE:
+            plan = _workspace_restore(patient_id, plan)
+        elif plan.action_type == actions.CLINICAL_HANDOFF:
+            plan = _workspace_handoff(patient_id, assessment, plan)
+        else:
+            plan = _workspace_maintain(assessment, plan)
+    return plan
+
+
+def _workspace_restore(patient_id: str, plan: actions.ActionPlan) -> actions.ActionPlan:
+    st.markdown("**本周目标**")
+    st.write("先把测量节奏重新接起来。")
+    st.markdown("**执行支持**")
+    st.caption("不是改测量频率，只是把下一次测量绑到一个容易记住的节点。")
+    options = list(actions.TRIGGER_OPTIONS)
+    current = plan.trigger_node if plan.trigger_node in options else options[0]
+    choice = st.radio("固定生活节点", options, index=options.index(current), key=f"node_{patient_id}")
+    if choice != plan.trigger_node:
+        plan = apply_plan_event(patient_id, plan, "set_trigger", choice)
+        st.rerun()
+    if choice == "自己定一个":
+        custom = st.text_input(
+            "写一个你每天都会碰到的节点",
+            value=plan.custom_trigger or "",
+            key=f"custom_{patient_id}",
+        )
+        if custom.strip() and custom.strip() != (plan.custom_trigger or ""):
+            plan = apply_plan_event(patient_id, plan, "set_custom_trigger", custom.strip())
+            st.rerun()
+    st.write(plan.execution_support)
+    st.markdown("**执行反馈**")
+    if plan.status == "done":
+        st.success("今天这次已经接上了。")
+        st.caption(f"状态：{plan.status}")
+        return plan
     left, right = st.columns(2)
     with left:
-        st.markdown("**近期事实**")
-        signals = [str(item).strip() for item in (assessment.signals or []) if str(item).strip()]
-        if signals:
-            for item in signals:
-                st.markdown(f"- {item}")
-        else:
-            st.caption("当前没有可展示的事实点。")
+        if st.button("今天已测", key=f"measured_{patient_id}", width="stretch"):
+            apply_plan_event(patient_id, plan, "measure_done")
+            st.rerun()
     with right:
-        st.markdown("**下一步行动**")
-        st.info(
-            WEEK_ACTION.get(
-                assessment.state or "",
-                playbook.get("opening") or "继续按提醒测量",
-            )
-        )
-        if playbook.get("opening"):
-            st.caption(playbook["opening"])
+        if st.button("还没测", key=f"skip_{patient_id}", width="stretch"):
+            apply_plan_event(patient_id, plan, "measure_skip")
+            st.rerun()
+    if plan.status == "skipped":
+        st.write("是容易忘，还是这个时间不方便？")
+        a, b = st.columns(2)
+        with a:
+            if st.button("容易忘", key=f"forget_{patient_id}", width="stretch"):
+                apply_plan_event(patient_id, plan, "friction_forget")
+                st.rerun()
+        with b:
+            if st.button("时间不方便", key=f"inconv_{patient_id}", width="stretch"):
+                apply_plan_event(patient_id, plan, "friction_inconvenient")
+                st.rerun()
+    st.caption(f"状态：{plan.status}")
+    return plan
+
+
+def _workspace_handoff(
+    patient_id: str,
+    assessment: Assessment,
+    plan: actions.ActionPlan,
+) -> actions.ActionPlan:
+    st.markdown("**本周目标**")
+    st.write("把这次异常顺利带到医生那里。")
+    st.markdown("**必须先做**")
+    st.write("先按规范复测一次确认，并尽快就医。")
+    st.markdown("**AI 产出：就诊摘要**")
+    if st.button("生成就诊摘要", key=f"handoff_{patient_id}"):
+        text = actions.build_visit_summary(assessment)
+        plan = apply_plan_event(patient_id, plan, "generate_handoff", text)
+        st.rerun()
+    if plan.handoff_text:
+        st.code(plan.handoff_text, language="markdown")
+        st.caption("可点右上角复制。")
+    else:
+        st.caption("点上方按钮后，会根据当前记录整理一份给医生看的摘要。")
+    st.markdown("**执行反馈**")
+    a, b = st.columns(2)
+    with a:
+        if st.button("已复测", key=f"retest_{patient_id}", width="stretch"):
+            apply_plan_event(patient_id, plan, "remeasured")
+            st.rerun()
+    with b:
+        if st.button("准备就医", key=f"visit_{patient_id}", width="stretch"):
+            apply_plan_event(patient_id, plan, "ready_to_visit")
+            st.rerun()
+    bits = []
+    if plan.remeasured:
+        bits.append("已复测")
+    if plan.ready_to_visit:
+        bits.append("准备就医")
+    if bits:
+        st.success(" · ".join(bits))
+    st.caption(f"状态：{plan.status}")
+    return plan
+
+
+def _workspace_maintain(assessment: Assessment, plan: actions.ActionPlan) -> actions.ActionPlan:
+    summary = health_summary(assessment)
+    st.markdown("**现在看到的变化**")
+    for item in summary.get("evidence") or []:
+        st.markdown(f"- {item}")
+    st.markdown("**这阶段要验证什么**")
+    st.write("这个下降能不能继续保持。")
+    st.markdown("**怎么做**")
+    st.write("先保持现在的测量节奏。")
+    st.write("暂时不增加新的管理任务。")
+    st.markdown("**什么时候再看**")
+    st.write("新增一周记录后，我继续用同样口径比较。")
+    st.info("等待下一周期数据")
+    st.caption(f"状态：{plan.status} · 本轮观察变化，下一轮验证变化")
+    return plan
 
 
 def render_debug_view(
@@ -524,6 +686,59 @@ def render_debug_view(
     playbook: dict,
     patient_id: str,
 ) -> None:
+    with st.expander("重新运行判读", expanded=False):
+        st.caption(
+            "会清空缓存并重新执行同一套 Rules / State。"
+            "数据不变时，结果也不会变。仅供开发/演示核对。"
+        )
+        if st.button("重新运行判读", width="stretch"):
+            st.session_state.assess_nonce += 1
+            cached_assessment.clear()
+            st.rerun()
+
+    with st.expander("场景卡片（内部）", expanded=False):
+        st.caption("患者视图不再展示 Scene。这里用于验证 State × Scene / Prompt / Guard。")
+        b1, b2, b3 = st.columns(3)
+        clicked = None
+        with b1:
+            if st.button("S1 依从提醒", key="debug_s1", width="stretch"):
+                clicked = "S1"
+        with b2:
+            if st.button("S2 异常响应", key="debug_s2", width="stretch"):
+                clicked = "S2"
+        with b3:
+            if st.button("S3 周度总结", key="debug_s3", width="stretch"):
+                clicked = "S3"
+        if clicked:
+            card = call_coach(
+                assessment,
+                playbook,
+                push_user_msg(clicked),
+                history=[],
+                scene=clicked,
+            )
+            st.session_state.push_cards[clicked] = card
+        cards = st.session_state.push_cards
+        if not cards:
+            st.caption("尚未生成场景卡片。")
+        else:
+            for scene_id in ("S1", "S2", "S3"):
+                card = cards.get(scene_id)
+                if not card:
+                    continue
+                st.markdown(
+                    f"**{scene_id} {SCENES[scene_id]['label']}** · "
+                    f"degraded={bool(card.get('degraded'))}"
+                )
+                st.json(reply_payload(card))
+
+    with st.expander("ActionPlan（内部）", expanded=False):
+        plan = (st.session_state.action_plans or {}).get(patient_id)
+        if not plan:
+            st.caption("尚未生成 ActionPlan。")
+        else:
+            st.json(plan)
+
     with st.expander("判读依据", expanded=False):
         st.caption(
             f"risk_level = {assessment.risk_level}（描述性指标，不驱动行为）"
@@ -605,9 +820,8 @@ with st.sidebar:
     )
     playbook = get_playbook(assessment.state) if assessment.state else {}
 
-    st.markdown("**当前管理状态**")
+    st.markdown("**当前情况**")
     st.markdown(f"### {state_label(assessment.state)}")
-    st.caption(assessment.state or "")
 
     family_on = st.toggle(
         "家属共享",
@@ -617,13 +831,8 @@ with st.sidebar:
     if family_on:
         st.caption("已开启家属视角文案（演示，未发送）")
 
-    if st.button("重新判读", width="stretch"):
-        st.session_state.assess_nonce += 1
-        cached_assessment.clear()
-        st.rerun()
-
     if not api_configured():
-        st.warning("模型配置缺失。对话与推送将使用安全模板。")
+        st.warning("模型配置缺失。对话与推送将使用备用回复。")
 
 plot_df = load_patient_data(patient["file"])
 

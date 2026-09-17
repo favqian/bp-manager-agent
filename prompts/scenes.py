@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from contract import Assessment
@@ -41,11 +42,10 @@ SCENES: dict[str, dict[str, Any]] = {
         "label": "周度总结",
         "goal": "总结最近一段时间的数据表现",
         "priority": [
-            "近7天/30天已有事实",
-            "依从性、均值、晨晚差异、趋势等已有字段",
+            "最近7天最相关的事实",
             "当前 State 对应的下一步行动",
         ],
-        "must_focus": ["本周/近7天总结", "已有结构化指标", "下一步管理方向"],
+        "must_focus": ["本周/近7天总结", "下一步管理方向"],
         "must_not": ["单次异常通知", "单纯提醒今天测一次"],
     },
 }
@@ -78,8 +78,15 @@ def format_instruction(scene: dict[str, Any]) -> str:
             "若当前 State 需要专业升级，必须保留升级提醒，但主主题仍是本场景，不能写成另一张场景卡。",
             "若数据不足，必须声明无法判断趋势，不能编趋势。",
             "所有数字只能引用【判读结果】已有事实，禁止自行计算或编造。",
+            "不要写达标率、目标范围、目标范围内x%。140/90 是 Demo 参考线，不是治疗目标。",
+            "默认不要报达标百分比。本周总结只写最近7天，不要塞30天依从率/达标率/最高值。",
         ]
     )
+    if scene["id"] == "S3":
+        lines.append(
+            "例外：ESCALATION_REQUIRED 且最高读数不在近7天时，"
+            "写「过去30天有一次高压到了x」，因为这影响当前安全策略。"
+        )
     return "\n".join(lines)
 
 
@@ -92,12 +99,6 @@ def push_user_msg(scene_id: str) -> str:
         "严格按【本次场景说明】组织内容，按【当前状态策略卡】遵守安全边界。"
         "不得改变管理状态。只输出规定 JSON。不要编造数字。"
     )
-
-
-def _pct(value: Any) -> str | None:
-    if value is None:
-        return None
-    return f"{float(value):.0%}"
 
 
 def _mm(value: Any) -> str | None:
@@ -114,60 +115,95 @@ def pattern_values_fact(assessment: Assessment) -> str:
     delta_txt = _mm(delta) if delta is not None else None
     if morning and evening:
         if delta_txt is not None:
-            return f"晨间{morning}、晚间{evening}，相差{delta_txt}。"
-        return f"晨间{morning}、晚间{evening}。"
+            return f"早上{morning}，晚上{evening}，相差{delta_txt}。"
+        return f"早上{morning}，晚上{evening}。"
     if delta_txt is not None:
-        return f"晨晚差{delta_txt}。"
+        return f"早上平均比晚上高{delta_txt}。"
     return ""
 
 
 def _adherence_fact(assessment: Assessment) -> str:
-    r7 = _pct(assessment.adherence.get("rate_7d"))
-    r30 = _pct(assessment.adherence.get("rate_30d"))
-    parts: list[str] = []
-    if r7:
-        parts.append(f"近7天依从率{r7}。")
-    if r30:
-        parts.append(f"30天依从率{r30}。")
-    if not parts:
+    rate = assessment.adherence.get("rate_7d")
+    if rate is None:
         days = assessment.adherence.get("days_since_last")
         if days is not None:
-            parts.append(f"距上次测量{int(days)}天。")
-    return "".join(parts)
+            return f"距上次测量{int(days)}天。"
+        return ""
+    if float(rate) < 0.3:
+        return "这周测得比较少。"
+    if float(rate) >= 0.8:
+        return "这周基本都有测。"
+    return "这周有一部分日子测过了。"
+
+
+def crisis_reading_fact(assessment: Assessment) -> str:
+    """安全相关最高读数。超出近7天时标明过去30天，避免写进「本周」。"""
+    maximum = assessment.bp.get("max_single") or {}
+    high = _mm(maximum.get("sys"))
+    if not high:
+        return "有一次读数需要优先处理。"
+    date = maximum.get("date")
+    as_of = assessment.as_of
+    label = "最近"
+    if date and as_of:
+        try:
+            start = datetime.strptime(str(date)[:10], "%Y-%m-%d")
+            end = datetime.strptime(str(as_of)[:10], "%Y-%m-%d")
+            if (end - start).days > 7:
+                label = "过去30天"
+        except ValueError:
+            label = "过去30天"
+    return f"{label}有一次高压到了{high}。"
 
 
 def _anomaly_fact(assessment: Assessment) -> str:
     maximum = assessment.bp.get("max_single") or {}
     sys_max = maximum.get("sys")
     if sys_max is not None:
-        return f"30天最高收缩压{_mm(sys_max)}。"
+        return crisis_reading_fact(assessment)
     delta = assessment.pattern.get("delta")
     morning = _mm(assessment.pattern.get("morning_mean"))
     evening = _mm(assessment.pattern.get("evening_mean"))
     if morning and evening and delta is not None:
         return pattern_values_fact(assessment)
     if delta is not None:
-        return f"晨晚差{_mm(delta)}。"
+        return f"早上平均比晚上高{_mm(delta)}。"
     sys7 = _mm(assessment.bp.get("sys_mean_7d"))
     if sys7:
-        return f"近7天均值{sys7}。"
+        return f"这周高压平均{sys7}。"
     return _adherence_fact(assessment)
 
 
 def _summary_fact(assessment: Assessment) -> str:
+    """本周总结：按 State 选题，默认近7天，不翻译 target_rate。"""
     sys7 = _mm(assessment.bp.get("sys_mean_7d"))
-    r7 = _pct(assessment.adherence.get("rate_7d"))
-    target = _pct(assessment.bp.get("target_rate_30d"))
-    parts: list[str] = []
+    direction = (assessment.trend or {}).get("direction")
+    if assessment.escalation_required:
+        return crisis_reading_fact(assessment)
+    if assessment.state == "MONITORING_GAP":
+        return "这周测得比较少。"
+    if assessment.state == "SUSTAINED_HIGH":
+        parts: list[str] = []
+        if sys7:
+            parts.append(f"这周高压平均{sys7}。")
+        if direction == "improving":
+            parts.append("最近数字有往下走。")
+        return "".join(parts) or _adherence_fact(assessment)
+    parts = [_adherence_fact(assessment)]
     if sys7:
-        parts.append(f"近7天均值{sys7}。")
-    if r7:
-        parts.append(f"近7天依从率{r7}。")
-    if target and len(parts) < 3:
-        parts.append(f"30天达标率{target}。")
-    if not parts:
-        return _adherence_fact(assessment)
-    return "".join(parts)
+        parts.append(f"这周高压平均{sys7}。")
+    text = "".join(part for part in parts if part)
+    return text or _adherence_fact(assessment)
+
+
+def _summary_explain(assessment: Assessment) -> str:
+    if assessment.escalation_required:
+        return "这次需要优先处理。"
+    if assessment.state == "MONITORING_GAP":
+        return "现在还看不出明显变化。"
+    if assessment.state == "SUSTAINED_HIGH":
+        return "这周整体还是偏高。"
+    return "以上是这周的情况。"
 
 
 def _safety_explain(assessment: Assessment) -> str:
@@ -185,19 +221,21 @@ def _scene_action(assessment: Assessment, scene_id: str) -> str:
         if scene_id == "S1":
             return "今天测一次记下。尽快就医。"
         if scene_id == "S3":
-            return "尽快就医。把记录带去复诊。"
+            return "先复测一次。尽快就医。"
         return "尽快就医。先复测一次确认。"
     if assessment.sufficient is False:
         return "今天测一次就行。"
     if assessment.state == "MONITORING_GAP":
-        return "今天早起后测一次就行。"
+        if scene_id == "S3":
+            return "今天先测一次，把记录接上。"
+        return "今天早起后测一次就好。"
     if assessment.state == "MORNING_SURGE":
-        return "把晨晚差记录下来。用药别自己改。"
+        return "把早晚记录留下来。用药别自己改。"
     if assessment.state == "SUSTAINED_HIGH":
-        return "把近窗记录下来，复诊时提出。"
+        return "把最近记录留好，复诊时给医生看。"
     if assessment.state == "IMPROVING":
         return "继续观察，用药别自己改。"
-    return "照现在这样测就行。"
+    return "照现在这样测就好。"
 
 
 def fallback_draft(assessment: Assessment, scene_id: str) -> dict[str, str]:
@@ -218,7 +256,9 @@ def fallback_draft(assessment: Assessment, scene_id: str) -> dict[str, str]:
                 explain = "目前数据不足，我无法判断趋势。"
     elif scene_id == "S3":
         fact = _summary_fact(assessment)
-        explain = "以上是近7天总结。" + safety
+        explain = _summary_explain(assessment)
+        if assessment.sufficient is False:
+            explain = explain + safety
     else:
         raise KeyError(f"未知场景: {scene_id}")
 

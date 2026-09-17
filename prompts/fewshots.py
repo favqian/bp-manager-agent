@@ -322,9 +322,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_INSUFF, "我最近怎么样？"),
             "assistant": _dump(
                 {
-                    "fact": f"{_REQUIRED_INSUFFICIENT}。覆盖率 0.05，近窗依从率 0.0。",
-                    "explain": "记录还太少，我不敢往下猜是高了还是稳了。先把测量接上，后面才看得清。",
-                    "action": "今天顺手测一次就好，测完我们再看。",
+                    "fact": f"{_REQUIRED_INSUFFICIENT}。",
+                    "explain": "最近记录还少。现在还看不出变化。",
+                    "action": "今天测一次就好。",
                     "escalation_action": None,
                     "disclaimers": ["数据不足声明"],
                 }
@@ -334,9 +334,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_INSUFF, "为什么这几天总是偏高？"),
             "assistant": _dump(
                 {
-                    "fact": f"{_REQUIRED_INSUFFICIENT}。近窗没有可引用的收缩压均值。",
-                    "explain": "这几天是不是偏高，我现在没有足够读数能下这个判断，不能顺着感觉往高处想。",
-                    "action": "先补一次测量。有了新读数，我们再一起看。",
+                    "fact": f"{_REQUIRED_INSUFFICIENT}。",
+                    "explain": "现在还看不出是高是稳。",
+                    "action": "今天测一次就好。",
                     "escalation_action": None,
                     "disclaimers": ["数据不足声明", "非诊断声明"],
                 }
@@ -346,9 +346,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_INSUFF, "我是不是要中风了？"),
             "assistant": _dump(
                 {
-                    "fact": f"{_REQUIRED_INSUFFICIENT}。覆盖率 0.05。",
-                    "explain": "中风这种判断我做不了，也不该拿这么少的记录去吓你。现在缺的是测量，不是结论。",
-                    "action": "引导咨询医生/继续监测：今天先测一次；要是你特别不放心，把现有记录带去问医生。",
+                    "fact": f"{_REQUIRED_INSUFFICIENT}。",
+                    "explain": "那种严重判断我做不了。现在缺的是测量。",
+                    "action": "今天测一次就好。",
                     "escalation_action": None,
                     "disclaimers": ["数据不足声明", "非诊断声明"],
                 }
@@ -360,9 +360,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_MORNING, "我最近怎么样？"),
             "assistant": _dump(
                 {
-                    "fact": "早晨收缩压均值 152，晚上 137，差 15。近窗均值 145。",
-                    "explain": "更值得记下的是时段差：早上明显高于晚上。这是观察规律，不是我在解释原因。",
-                    "action": "接下来几天照常早晚各记一次，复诊时把这组晨晚数字带给医生看。用药先按医嘱，别自己改时间。",
+                    "fact": "早上平均比晚上高15。",
+                    "explain": "早上的读数比晚上高一些。",
+                    "action": "把早晚记录留下来。用药别自己改。",
                     "escalation_action": None,
                     "disclaimers": ["非因果声明", "非诊断声明"],
                 }
@@ -372,9 +372,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_MORNING, "为什么这几天总是偏高？"),
             "assistant": _dump(
                 {
-                    "fact": "近窗收缩压均值 145。晨间 152、晚间 137，差 15。",
-                    "explain": "看起来不是全天都高，主要是早晨这一截更高。为什么会这样，我不能猜，需要医生结合你的情况看。",
-                    "action": "先把早晚读数连续记下，复诊时主动问医生这组差值。服药时间不要自己调。",
+                    "fact": "早上平均比晚上高15。",
+                    "explain": "不是全天都高。主要是早上这一截。",
+                    "action": "把早晚记录留下来。用药别自己改。",
                     "escalation_action": None,
                     "disclaimers": ["非因果声明", "非诊断声明"],
                 }
@@ -384,9 +384,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_MORNING, "我是不是要中风了？"),
             "assistant": _dump(
                 {
-                    "fact": "晨间 152、晚间 137，差 15。近窗均值 145。",
-                    "explain": "我不能根据这些数字判断你会不会中风，也不做那种推测。眼下能说清楚的，只是早上比晚上高。",
-                    "action": "引导咨询医生/继续监测：把晨晚对比带去问医生；这几天继续按点测，有不舒服及时就医。",
+                    "fact": "早上平均比晚上高15。",
+                    "explain": "我不能根据数字猜后果。",
+                    "action": "把早晚记录留下来。用药别自己改。",
                     "escalation_action": None,
                     "disclaimers": ["非诊断声明", "非因果声明"],
                 }
@@ -398,9 +398,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_IMPROVE, "我最近怎么样？"),
             "assistant": _dump(
                 {
-                    "fact": "前后两段收缩压对比 -8，近窗均值 142，周斜率 -4.4。",
-                    "explain": "这半个月数字在往下走，说明测量和日常安排你有在坚持。这是过程上的变化，不是宣告已经没事。",
-                    "action": "照现在这样测下去就行，药不要自己停。下次复诊把这段对比带上。",
+                    "fact": "近两周对比-8。",
+                    "explain": "这阵子数字在往下走。这是坚持测量的过程变化。",
+                    "action": "继续观察。用药别自己改。",
                     "escalation_action": None,
                     "disclaimers": ["非因果声明", "非治愈声明"],
                 }
@@ -410,9 +410,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_IMPROVE, "我最近的运动有没有帮助？"),
             "assistant": _dump(
                 {
-                    "fact": "近窗步数 6200，步数变化 900。收缩压对比 -8，近窗均值 142。",
-                    "explain": "活动量和血压下降是同期出现的，我只能说两边一起被观察到了，不能说就是运动把血压带下来的。",
-                    "action": "能走的日子继续走，测量也别断。有没有帮助，留给复诊时医生一起看。",
+                    "fact": "这周步数6200。近两周对比-8。",
+                    "explain": "只能说两边同期出现。这是坚持测量的过程。",
+                    "action": "继续观察。用药别自己改。",
                     "escalation_action": None,
                     "disclaimers": ["非因果声明", "非治愈声明"],
                 }
@@ -422,9 +422,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_IMPROVE, "是不是可以停药了？"),
             "assistant": _dump(
                 {
-                    "fact": "收缩压对比 -8，近窗均值 142。",
-                    "explain": "数字在往下走，值得肯定，但不等于可以停药。降压药一般要长期按医嘱吃，能不能减、能不能停，只能医生结合你的情况定，我不能替你做这个决定。",
-                    "action": "引导咨询医生/继续监测：先不要自己停；把这段下降记录带去问医生或药师。",
+                    "fact": "近两周对比-8。",
+                    "explain": "数字往下走，也不等于能停药。",
+                    "action": "继续观察。先别自己停。",
                     "escalation_action": None,
                     "disclaimers": ["非治愈声明", "非诊断声明"],
                 }
@@ -436,9 +436,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_GAP, "我最近怎么样？"),
             "assistant": _dump(
                 {
-                    "fact": "近窗依从率 0.14，近窗收缩压均值 156。",
-                    "explain": "不是你不听话，这两天多半是忙忘了。数字还在，就是近窗测得少了点。",
-                    "action": "今天早起后测一次就够，测完我们就接着看。",
+                    "fact": "最近记录还少。",
+                    "explain": "最近是不是有点忙？现在还看不出明显变化。",
+                    "action": "今天早起后测一次就好。",
                     "escalation_action": None,
                     "disclaimers": ["数据不足声明"],
                 }
@@ -450,9 +450,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_ESCALATE, "我最近怎么样？"),
             "assistant": _dump(
                 {
-                    "fact": "有一次收缩压读数 185。",
-                    "explain": "这件事我想先说清楚：这不是让我跟你细聊趋势的时候，是该让医生看一眼的时候。",
-                    "action": "尽快就医。先按平时方法再测一次确认，然后把 185 这次读数带去给医生。",
+                    "fact": "最近有一次高压读数到了185。",
+                    "explain": "这次需要优先处理。",
+                    "action": "先复测一次确认。尽快就医。",
                     "escalation_action": "seek_professional_help",
                     "disclaimers": ["非诊断声明"],
                 }
@@ -462,9 +462,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_ESCALATE, "那我现在是不是很危险？"),
             "assistant": _dump(
                 {
-                    "fact": "触发关注的是单次收缩压 185。",
-                    "explain": "危险不危险，我不帮你下这个判断，也不往坏处猜。我能明确的是：这次读数需要专业人员接手。",
-                    "action": "尽快就医，不要只在这里继续追问。复测一次后联系医生。",
+                    "fact": "最近有一次高压读数到了185。",
+                    "explain": "危险不危险，我不帮你下判断。",
+                    "action": "尽快就医。先复测一次确认。",
                     "escalation_action": "seek_professional_help",
                     "disclaimers": ["非诊断声明"],
                 }
@@ -476,9 +476,9 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
             "user": _user(_A_SUSTAINED, "我最近怎么样？"),
             "assistant": _dump(
                 {
-                    "fact": "近窗收缩压均值 156，达标比例 0.08。",
-                    "explain": "整体看，最近这一段是偏高一些。我不拿你跟别人比，也不猜原因。",
-                    "action": "把近窗均值 156 记下来，复诊时直接问医生。这几天照常测。",
+                    "fact": "这周高压平均156。",
+                    "explain": "这周整体还是偏高。最近测到的高压大多还在参考线以上。",
+                    "action": "把这阵子记录留好。复诊时提出。",
                     "escalation_action": None,
                     "disclaimers": ["非因果声明"],
                 }
@@ -486,6 +486,59 @@ FEWSHOTS: dict[str, list[dict[str, str]]] = {
         },
     ],
 }
+
+
+def get_conversation_fewshots(intent: str) -> list[dict[str, str]]:
+    from prompts.intents import (
+        CONV_EMOTION,
+        CONV_GREETING,
+        CONV_MEDICAL,
+        CONV_OFF,
+    )
+
+    greeting = _dump(
+        {
+            "fact": "你好呀。",
+            "explain": "今天想看看最近的血压？",
+            "action": "还是有别的健康问题想问我？",
+            "escalation_action": None,
+            "disclaimers": [],
+        }
+    )
+    emotion = _dump(
+        {
+            "fact": "天天记确实容易觉得烦。",
+            "explain": "先别给自己加很多任务。",
+            "action": "今天先完成一次就好。",
+            "escalation_action": None,
+            "disclaimers": [],
+        }
+    )
+    off_topic = _dump(
+        {
+            "fact": "这个我先不展开啦。",
+            "explain": "我更擅长陪你看血压和记录。",
+            "action": "最近有哪里拿不准吗？",
+            "escalation_action": None,
+            "disclaimers": [],
+        }
+    )
+    medical = _dump(
+        {
+            "fact": "你是想确认能不能少吃药。",
+            "explain": "仅凭这些记录不能决定停药。",
+            "action": "先别自己调整。把记录带给医生。",
+            "escalation_action": None,
+            "disclaimers": ["非诊断声明", "非治愈声明"],
+        }
+    )
+    table = {
+        CONV_GREETING: [{"user": "你好", "assistant": greeting}],
+        CONV_EMOTION: [{"user": "我好烦，不想测了", "assistant": emotion}],
+        CONV_OFF: [{"user": "讲个笑话", "assistant": off_topic}],
+        CONV_MEDICAL: [{"user": "我能停药吗？", "assistant": medical}],
+    }
+    return table.get(intent, [])
 
 
 def get_fewshots(state: str) -> list[dict[str, str]]:
@@ -500,6 +553,8 @@ def _numbers_in_text(text: str) -> set[float]:
 
 
 def _check_examples() -> None:
+    from guard import _expand_allowed
+
     bound = {
         ManagementState.INSUFFICIENT_DATA.value: _A_INSUFF,
         ManagementState.MORNING_SURGE.value: _A_MORNING,
@@ -509,7 +564,7 @@ def _check_examples() -> None:
         ManagementState.SUSTAINED_HIGH.value: _A_SUSTAINED,
     }
     for state, shots in FEWSHOTS.items():
-        facts = bound[state].fact_values()
+        facts = _expand_allowed(bound[state].fact_values())
         for index, shot in enumerate(shots, start=1):
             reply = json.loads(shot["assistant"])
             if state == ManagementState.INSUFFICIENT_DATA.value:
@@ -517,7 +572,6 @@ def _check_examples() -> None:
                 if _REQUIRED_INSUFFICIENT not in blob:
                     raise SystemExit(f"{state}[{index}] 缺少规定句")
             leaked = _numbers_in_text(shot["assistant"]) - facts
-            # 动作层允许「一次」以外的流程性数字；这里只拦 fact/explain 里的事实数字。
             body = f"{reply['fact']} {reply['explain']}"
             leaked_body = _numbers_in_text(body) - facts
             if leaked_body:
