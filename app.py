@@ -123,8 +123,8 @@ def load_eval_summary() -> str:
     return f"{latest.name}\n\n{head}"
 
 
-@st.cache_resource
 def api_configured() -> bool:
+    """与 agent 真实读 key 逻辑同源；不缓存，避免误报被锁死。"""
     return agent.check_config()
 
 
@@ -1188,6 +1188,23 @@ def render_debug_view(
             st.caption("尚未生成 ActionPlan。")
         else:
             st.json(plan)
+
+    with st.expander("模型运行状态", expanded=False):
+        runtime = agent.describe_runtime()
+        st.caption("事实源：agent.describe_runtime() · 不含 API Key")
+        st.json(
+            {
+                "api_key_configured": runtime.get("api_key_configured"),
+                "config_source": runtime.get("config_source"),
+                "model_call_succeeded": runtime.get("model_call_succeeded"),
+                "fallback_used": runtime.get("fallback_used"),
+                "degraded": runtime.get("degraded"),
+                "response_model": runtime.get("response_model"),
+                "requested_model": runtime.get("requested_model"),
+                "attempts": runtime.get("attempts"),
+                "attempt_details": runtime.get("attempt_details"),
+            }
+        )
 
     with st.expander("判读依据", expanded=False):
         st.caption(

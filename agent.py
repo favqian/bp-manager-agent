@@ -35,21 +35,42 @@ _LAST_TURN_TRACE: dict[str, Any] = {
     "fallback_used": False,
     "final_reply": None,
 }
+_LAST_CONFIG_SOURCE: str = "none"
+
+
+def _read_streamlit_secret(name: str) -> str:
+    """读取 Streamlit Secrets；非 Streamlit 环境或未配置时返回空串。不打印值。"""
+    try:
+        import streamlit as st  # noqa: WPS433 — 仅在需要时探测 Cloud/本地 secrets
+
+        raw = st.secrets.get(name, "")
+    except Exception:
+        return ""
+    if raw is None:
+        return ""
+    return str(raw).strip()
 
 
 def _read_key() -> str:
+    """唯一读 key 入口。兼容本地 .env 与 Streamlit Secrets / 进程环境变量。"""
+    global _LAST_CONFIG_SOURCE
     load_dotenv(ENV_PATH, override=False)
-    return (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    env_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    if env_key:
+        # Cloud 常把 Secrets 注入进程环境；本地则多由 .env 载入 getenv。
+        _LAST_CONFIG_SOURCE = "dotenv" if ENV_PATH.exists() else "process_env"
+        return env_key
+    secret_key = _read_streamlit_secret("DEEPSEEK_API_KEY")
+    if secret_key:
+        _LAST_CONFIG_SOURCE = "streamlit_secrets"
+        return secret_key
+    _LAST_CONFIG_SOURCE = "none"
+    return ""
 
 
 def check_config() -> bool:
-    """只检查 .env 是否存在、key 是否读到且长度 > 0。不打印 key 的任何片段。"""
-    key = _read_key() if ENV_PATH.exists() else ""
-    if ENV_PATH.exists() and len(key) > 0:
-        print("配置正常")
-        return True
-    print("配置缺失")
-    return False
+    """以能否读到非空 DEEPSEEK_API_KEY 为准，不以 .env 文件是否存在为准。"""
+    return len(_read_key()) > 0
 
 
 def _client() -> OpenAI:
@@ -75,14 +96,35 @@ def _call_model(messages: list[dict[str, str]]) -> str:
 
 
 def describe_runtime() -> dict[str, Any]:
-    """不打印 key。供 debug/test 确认实际命中的模型。"""
+    """模型运行状态唯一事实源（不含 API Key 或其片段）。"""
+    configured = check_config()
+    attempts = list(_LAST_TURN_TRACE.get("attempts") or [])
+    fallback_used = bool(_LAST_TURN_TRACE.get("fallback_used"))
+    degraded = bool(_LAST_TURN_TRACE.get("degraded"))
+    model_call_succeeded = any(
+        bool(row.get("guard_ok")) for row in attempts
+    ) and not fallback_used
     return {
+        "api_key_configured": configured,
+        "config_source": _LAST_CONFIG_SOURCE if configured else "none",
         "requested_model": MODEL,
         "response_model": _LAST_RESPONSE_MODEL,
         "base_url": BASE_URL,
         "thinking": THINKING.get("type"),
         "temperature": TEMPERATURE,
         "max_tokens": MAX_TOKENS,
+        "model_call_succeeded": model_call_succeeded,
+        "fallback_used": fallback_used,
+        "degraded": degraded,
+        "attempts": len(attempts),
+        "attempt_details": [
+            {
+                "attempt": row.get("attempt"),
+                "guard_ok": bool(row.get("guard_ok")),
+                "guard_reasons": list(row.get("guard_reasons") or []),
+            }
+            for row in attempts
+        ],
     }
 
 
