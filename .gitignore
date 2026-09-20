@@ -20,3 +20,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+/.pm-workflow/
+/scripts/pm-runtime-config.js
+/scripts/.venv/
+/.handoff/

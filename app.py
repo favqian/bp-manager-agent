@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import html
 import json
 
 import altair as alt
@@ -136,13 +137,34 @@ def _segmented(plot_df: pd.DataFrame, value_col: str) -> pd.DataFrame:
 
 
 def build_bp_chart(plot_df: pd.DataFrame) -> alt.Chart:
+    """真实模拟数据；视觉弱化，不抢过 AI Coach / Action。"""
+    axis = alt.Axis(
+        format="%m-%d",
+        labelColor="#9CA3AF",
+        titleColor="#9CA3AF",
+        gridColor="#EEF0F4",
+        domainColor="#E5E7EB",
+        tickColor="#E5E7EB",
+    )
+    y_axis = alt.Axis(
+        labelColor="#9CA3AF",
+        titleColor="#9CA3AF",
+        gridColor="#EEF0F4",
+        domainColor="#E5E7EB",
+        tickColor="#E5E7EB",
+    )
     systolic = (
         alt.Chart(_segmented(plot_df, "systolic_bp"))
-        .mark_line(point=True, strokeWidth=2)
+        .mark_line(point={"size": 28, "filled": True}, strokeWidth=1.75)
         .encode(
-            x=alt.X("plot_time:T", title="日期", axis=alt.Axis(format="%m-%d")),
-            y=alt.Y("systolic_bp:Q", title="血压 (mmHg)", scale=alt.Scale(zero=False)),
-            color=alt.value("#c45c4a"),
+            x=alt.X("plot_time:T", title=None, axis=axis),
+            y=alt.Y(
+                "systolic_bp:Q",
+                title="mmHg",
+                scale=alt.Scale(zero=False),
+                axis=y_axis,
+            ),
+            color=alt.value("#E45B5B"),
             detail="segment:N",
             tooltip=[
                 alt.Tooltip("date:T", title="日期"),
@@ -153,11 +175,16 @@ def build_bp_chart(plot_df: pd.DataFrame) -> alt.Chart:
     )
     diastolic = (
         alt.Chart(_segmented(plot_df, "diastolic_bp"))
-        .mark_line(point=True, strokeWidth=2)
+        .mark_line(point={"size": 28, "filled": True}, strokeWidth=1.75)
         .encode(
-            x=alt.X("plot_time:T", title="日期", axis=alt.Axis(format="%m-%d")),
-            y=alt.Y("diastolic_bp:Q", title="血压 (mmHg)", scale=alt.Scale(zero=False)),
-            color=alt.value("#3d6f9a"),
+            x=alt.X("plot_time:T", title=None, axis=axis),
+            y=alt.Y(
+                "diastolic_bp:Q",
+                title="mmHg",
+                scale=alt.Scale(zero=False),
+                axis=y_axis,
+            ),
+            color=alt.value("#4F7FE0"),
             detail="segment:N",
             tooltip=[
                 alt.Tooltip("date:T", title="日期"),
@@ -167,18 +194,20 @@ def build_bp_chart(plot_df: pd.DataFrame) -> alt.Chart:
         )
     )
     systolic_ref = (
-        alt.Chart(pd.DataFrame({"y": [140], "label": ["140"]}))
-        .mark_rule(strokeDash=[6, 4], color="#8a8178")
+        alt.Chart(pd.DataFrame({"y": [140]}))
+        .mark_rule(strokeDash=[4, 5], color="#D1D5DB", strokeWidth=1)
         .encode(y="y:Q")
     )
     diastolic_ref = (
-        alt.Chart(pd.DataFrame({"y": [90], "label": ["90"]}))
-        .mark_rule(strokeDash=[6, 4], color="#b7aea6")
+        alt.Chart(pd.DataFrame({"y": [90]}))
+        .mark_rule(strokeDash=[4, 5], color="#E5E7EB", strokeWidth=1)
         .encode(y="y:Q")
     )
     return (
         (systolic + diastolic + systolic_ref + diastolic_ref)
-        .properties(height=380)
+        .properties(height=210)
+        .configure_view(strokeWidth=0)
+        .configure_axis(labelFontSize=11, titleFontSize=11)
         .interactive()
     )
 
@@ -207,6 +236,50 @@ def format_rate(value) -> str:
     if value is None:
         return "—"
     return f"{float(value):.0%}"
+
+
+def format_completion(assessment: Assessment) -> str:
+    """用户视图用定性完成度，避免堆百分比 KPI。"""
+    rate = assessment.adherence.get("rate_7d")
+    if rate is None:
+        return "—"
+    value = float(rate)
+    if value < 0.4:
+        return "偏低"
+    if value < 0.75:
+        return "较完整"
+    return "完整"
+
+
+def user_status_title(state: str | None) -> str:
+    """患者页展示用语；内部 State Code 仍只在 Debug。"""
+    mapping = {
+        "MONITORING_GAP": "监测暂时断了",
+        "ESCALATION_REQUIRED": "需要专业关注",
+        "SUSTAINED_HIGH": "目前仍偏高",
+        "INSUFFICIENT_DATA": "记录还不够",
+        "MORNING_SURGE": "早晚差别比较大",
+        "IMPROVING": "正在变好",
+        "STABLE_MAINTAIN": "目前比较平稳",
+    }
+    if not state:
+        return "未判读"
+    return mapping.get(state, state_label(state))
+
+
+def user_status_sub(state: str | None) -> str:
+    mapping = {
+        "MONITORING_GAP": "最近记录断了一些",
+        "ESCALATION_REQUIRED": "过去30天有一次异常读数",
+        "SUSTAINED_HIGH": "近两周出现下降，整体仍偏高",
+        "INSUFFICIENT_DATA": "先把测量补起来再判断",
+        "MORNING_SURGE": "可以把早晚记录留好",
+        "IMPROVING": "先巩固现有节奏",
+        "STABLE_MAINTAIN": "保持现在的测量习惯即可",
+    }
+    if not state:
+        return ""
+    return mapping.get(state, "")
 
 
 def _mm(value) -> str | None:
@@ -412,41 +485,316 @@ def inject_styles() -> None:
     st.markdown(
         """
         <style>
-          [data-testid="stHeader"] { background: rgba(255,255,255,0.92); }
-          .block-container { padding-top: 3.4rem; padding-bottom: 4.5rem; max-width: 1180px; }
-          .disclaimer-banner {
-            background: #fff6e8;
-            border: 1px solid #ead9b8;
-            color: #5c4a32;
-            border-radius: 10px;
-            padding: 0.7rem 1rem;
-            margin: 0 0 1rem 0;
-            font-size: 0.92rem;
+          :root {
+            --bp-bg: #F3F4F6;
+            --bp-surface: #FFFFFF;
+            --bp-text: #1C1C1E;
+            --bp-muted: #6B7280;
+            --bp-accent: #4F7FE0;
+            --bp-accent-soft: #EEF3FC;
+            --bp-warn: #D97757;
+            --bp-warn-soft: #FBF1EC;
+            --bp-ok: #3D8B6E;
+            --bp-ok-soft: #EDF7F2;
+            --bp-line: #E5E7EB;
+            --bp-radius: 16px;
           }
-          .kpi-row {
+          html, body, [data-testid="stAppViewContainer"] {
+            background: var(--bp-bg) !important;
+            color: var(--bp-text);
+            font-family: "SF Pro Text", "PingFang SC", "Noto Sans SC",
+              "Microsoft YaHei", system-ui, sans-serif;
+          }
+          [data-testid="stHeader"] { background: rgba(243,244,246,0.92); }
+          [data-testid="stToolbar"] { background: transparent; }
+          .block-container {
+            padding-top: 1.6rem;
+            padding-bottom: 3.5rem;
+            max-width: 1120px;
+          }
+          [data-testid="stSidebar"] {
+            background: #F7F8FA !important;
+            border-right: 1px solid var(--bp-line);
+          }
+          [data-testid="stSidebar"] * { color: var(--bp-text); }
+          .disclaimer-banner {
+            background: #FFF9F0;
+            border: 1px solid #F0E2C8;
+            color: #7A6548;
+            border-radius: 12px;
+            padding: 0.55rem 0.9rem;
+            margin: 0 0 1.1rem 0;
+            font-size: 0.84rem;
+          }
+          .bp-brand { margin: 0 0 1.25rem 0; }
+          .bp-brand h1 {
+            font-size: 1.85rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin: 0 0 0.25rem 0;
+            color: var(--bp-text);
+          }
+          .bp-brand p {
+            margin: 0;
+            color: var(--bp-muted);
+            font-size: 0.95rem;
+          }
+          .bp-card {
+            background: var(--bp-surface);
+            border: 1px solid var(--bp-line);
+            border-radius: var(--bp-radius);
+            padding: 1.15rem 1.25rem 1.2rem;
+            margin: 0 0 0.95rem 0;
+          }
+          .bp-card-quiet {
+            background: var(--bp-surface);
+            border: 1px solid var(--bp-line);
+            border-radius: var(--bp-radius);
+            padding: 0.95rem 1.15rem 0.85rem;
+            margin: 0 0 0.95rem 0;
+          }
+          .bp-section-label {
+            font-size: 0.78rem;
+            color: var(--bp-muted);
+            margin: 0 0 0.35rem 0;
+          }
+          .bp-status-grid {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr;
+            gap: 1.5rem;
+            align-items: center;
+          }
+          .bp-status-title {
+            font-size: 1.55rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin: 0 0 0.2rem 0;
+            line-height: 1.25;
+          }
+          .bp-status-sub {
+            margin: 0;
+            color: var(--bp-muted);
+            font-size: 0.9rem;
+          }
+          .bp-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.25rem;
+          }
+          .bp-metric-label {
+            font-size: 0.78rem;
+            color: var(--bp-muted);
+            margin-bottom: 0.2rem;
+          }
+          .bp-metric-value {
+            font-size: 1.55rem;
+            font-weight: 650;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+          }
+          .bp-trend-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: baseline;
+            margin-bottom: 0.35rem;
+          }
+          .bp-trend-head strong {
+            font-size: 0.98rem;
+            font-weight: 600;
+          }
+          .bp-trend-legend {
+            color: var(--bp-muted);
+            font-size: 0.78rem;
+          }
+          .bp-dot-sys { color: #E45B5B; }
+          .bp-dot-dia { color: #4F7FE0; }
+          .bp-coach-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            color: var(--bp-accent);
+            font-size: 0.84rem;
+            font-weight: 600;
+            margin: 0 0 0.75rem 0;
+          }
+          .bp-coach-eyebrow span {
+            width: 7px; height: 7px; border-radius: 99px;
+            background: var(--bp-accent); display: inline-block;
+          }
+          .bp-insight {
+            font-size: 1.2rem;
+            font-weight: 700;
+            line-height: 1.45;
+            letter-spacing: -0.015em;
+            margin: 0.15rem 0 0.85rem 0;
+          }
+          .bp-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.35rem;
+          }
+          .bp-chip {
+            background: var(--bp-accent-soft);
+            color: var(--bp-text);
+            border-radius: 12px;
+            padding: 0.55rem 0.8rem;
+            font-size: 0.86rem;
+            line-height: 1.35;
+          }
+          .bp-chip::before {
+            content: "";
+            display: inline-block;
+            width: 6px; height: 6px; border-radius: 99px;
+            background: var(--bp-accent);
+            margin-right: 0.45rem;
+            vertical-align: middle;
+          }
+          .bp-action-shell {
+            border-radius: var(--bp-radius);
+            border: 1.5px solid rgba(79,127,224,0.35);
+            background: var(--bp-surface);
+            padding: 0.35rem 0.2rem 0.55rem;
+            margin: 0 0 1rem 0;
+          }
+          .bp-action-shell.handoff {
+            border-color: rgba(217,119,87,0.42);
+          }
+          .bp-action-shell.maintain {
+            border-color: rgba(79,127,224,0.22);
+          }
+          .bp-action-anchor { display: none; }
+          /* Action Workspace：紧跟锚点后的边框容器，视觉权重最高 */
+          div.stElementContainer:has(.bp-action-anchor.restore) + div [data-testid="stVerticalBlockBorderWrapper"],
+          div[data-testid="stElementContainer"]:has(.bp-action-anchor.restore) + div [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1.5px solid rgba(79,127,224,0.38) !important;
+            border-radius: 16px !important;
+            background: #fff !important;
+            padding: 0.35rem 0.55rem 0.75rem !important;
+            box-shadow: 0 8px 28px rgba(31,41,55,0.04);
+          }
+          div.stElementContainer:has(.bp-action-anchor.handoff) + div [data-testid="stVerticalBlockBorderWrapper"],
+          div[data-testid="stElementContainer"]:has(.bp-action-anchor.handoff) + div [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1.5px solid rgba(217,119,87,0.42) !important;
+            border-radius: 16px !important;
+            background: #fff !important;
+            padding: 0.35rem 0.55rem 0.75rem !important;
+            box-shadow: 0 8px 28px rgba(31,41,55,0.04);
+          }
+          div.stElementContainer:has(.bp-action-anchor.maintain) + div [data-testid="stVerticalBlockBorderWrapper"],
+          div[data-testid="stElementContainer"]:has(.bp-action-anchor.maintain) + div [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1.5px solid rgba(79,127,224,0.22) !important;
+            border-radius: 16px !important;
+            background: #fff !important;
+            padding: 0.35rem 0.55rem 0.75rem !important;
+            box-shadow: 0 8px 28px rgba(31,41,55,0.04);
+          }
+          .bp-action-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            margin: 0.35rem 0.35rem 0.15rem;
+          }
+          .bp-action-desc {
+            color: var(--bp-muted);
+            font-size: 0.9rem;
+            margin: 0 0.35rem 0.55rem;
+          }
+          .bp-must {
+            background: var(--bp-warn-soft);
+            color: var(--bp-warn);
+            border-radius: 12px;
+            padding: 0.7rem 0.9rem;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin: 0.4rem 0 0.75rem;
+          }
+          .bp-steps {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 12px;
-            margin: 4px 0 18px;
+            gap: 0.65rem;
+            margin: 0.35rem 0 0.75rem;
           }
-          .kpi {
-            background: #fffdfb;
-            border: 1px solid #ece4d8;
+          .bp-step {
+            background: var(--bp-accent-soft);
             border-radius: 12px;
-            padding: 14px 16px;
-            min-height: 92px;
+            padding: 0.8rem 0.85rem;
           }
-          .kpi-label { font-size: 13px; color: #7a7168; }
-          .kpi-value {
-            font-size: 22px;
-            font-weight: 650;
-            margin-top: 8px;
+          .bp-step.ok { background: var(--bp-ok-soft); }
+          .bp-step-k {
+            font-size: 0.75rem;
+            color: var(--bp-muted);
+            margin-bottom: 0.25rem;
+          }
+          .bp-step-v {
+            font-size: 0.92rem;
+            font-weight: 600;
             line-height: 1.35;
-            word-break: break-word;
           }
-          .scene-hint { color: #8a8178; font-size: 0.86rem; margin-bottom: 0.4rem; }
+          .bp-pill {
+            display: inline-block;
+            background: var(--bp-ok-soft);
+            color: var(--bp-ok);
+            border-radius: 999px;
+            padding: 0.35rem 0.8rem;
+            font-size: 0.82rem;
+            font-weight: 600;
+            margin: 0.15rem 0 0.55rem;
+          }
+          .bp-chat-wrap {
+            background: var(--bp-surface);
+            border: 1px solid var(--bp-line);
+            border-radius: var(--bp-radius);
+            padding: 0.85rem 1rem 0.35rem;
+            margin: 0.35rem 0 0.5rem;
+            opacity: 0.98;
+          }
+          .bp-chat-wrap h3 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin: 0 0 0.55rem 0;
+          }
+          .bp-suggest {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin: 0 0 0.65rem 0;
+          }
+          .bp-suggest span {
+            background: var(--bp-accent-soft);
+            color: var(--bp-accent);
+            border-radius: 999px;
+            padding: 0.3rem 0.7rem;
+            font-size: 0.78rem;
+          }
+          div[data-testid="stChatInput"] {
+            margin-top: 0.15rem;
+          }
+          .stButton > button[kind="primary"],
+          .stButton > button[data-testid="baseButton-primary"] {
+            background: var(--bp-accent) !important;
+            border-color: var(--bp-accent) !important;
+            color: #fff !important;
+            border-radius: 12px !important;
+            font-weight: 600 !important;
+          }
+          .stButton > button {
+            border-radius: 12px !important;
+            border-color: var(--bp-line) !important;
+          }
+          div[data-baseweb="radio"] label {
+            background: var(--bp-surface);
+            border: 1px solid var(--bp-line);
+            border-radius: 12px;
+            padding: 0.55rem 0.75rem;
+            margin-bottom: 0.35rem;
+          }
+          [data-testid="stVerticalBlockBorderWrapper"] {
+            border-radius: 14px !important;
+          }
           @media (max-width: 900px) {
-            .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .bp-status-grid { grid-template-columns: 1fr; }
+            .bp-steps { grid-template-columns: 1fr; }
           }
         </style>
         """,
@@ -454,18 +802,39 @@ def inject_styles() -> None:
     )
 
 
-def render_kpis(assessment: Assessment) -> None:
-    items = [
-        ("当前情况", state_label(assessment.state)),
-        ("这周平均血压", format_mean(assessment)),
-        ("本周测量完成度", format_rate(assessment.adherence.get("rate_7d"))),
-    ]
-    cards = "".join(
-        f'<div class="kpi"><div class="kpi-label">{label}</div>'
-        f'<div class="kpi-value">{value}</div></div>'
-        for label, value in items
+def render_status_hero(assessment: Assessment) -> None:
+    title = html.escape(user_status_title(assessment.state))
+    sub = html.escape(user_status_sub(assessment.state))
+    mean = html.escape(format_mean(assessment))
+    done = html.escape(format_completion(assessment))
+    st.markdown(
+        f"""
+        <div class="bp-card">
+          <div class="bp-status-grid">
+            <div>
+              <div class="bp-section-label">当前情况</div>
+              <div class="bp-status-title">{title}</div>
+              <p class="bp-status-sub">{sub}</p>
+            </div>
+            <div class="bp-metrics">
+              <div>
+                <div class="bp-metric-label">这周平均血压</div>
+                <div class="bp-metric-value">{mean}</div>
+              </div>
+              <div>
+                <div class="bp-metric-label">测量完成情况</div>
+                <div class="bp-metric-value">{done}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.markdown(f'<div class="kpi-row">{cards}</div>', unsafe_allow_html=True)
+
+
+def render_kpis(assessment: Assessment) -> None:
+    render_status_hero(assessment)
 
 
 def render_user_view(
@@ -477,15 +846,41 @@ def render_user_view(
 ) -> None:
     patient_id = patient["patient_id"]
     plan = load_plan(patient_id, assessment)
-    render_kpis(assessment)
+    render_status_hero(assessment)
 
-    st.subheader("30 天血压趋势")
-    st.caption("红色：高压　蓝色：低压　灰色虚线：Demo 参考线 140 / 90　漏测处断线、不插值、不平滑")
+    st.markdown(
+        """
+        <div class="bp-card-quiet" style="padding-bottom:0.25rem;margin-bottom:0.35rem;">
+          <div class="bp-trend-head">
+            <strong>30 天血压趋势</strong>
+            <div class="bp-trend-legend">
+              <span class="bp-dot-sys">●</span> 高压　
+              <span class="bp-dot-dia">●</span> 低压　
+              参考线 140 / 90 · 漏测处断线
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.altair_chart(build_bp_chart(plot_df), width="stretch")
 
-    st.subheader("AI 教练")
     render_summary(assessment)
     plan = render_workspace(patient_id, assessment, plan)
+
+    st.markdown(
+        """
+        <div class="bp-chat-wrap">
+          <h3>继续问教练</h3>
+          <div class="bp-suggest">
+            <span>我最近怎么样？</span>
+            <span>那早上呢？</span>
+            <span>我该怎么做？</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     for item in st.session_state.chat_log:
         with st.chat_message(item["role"]):
@@ -499,7 +894,7 @@ def render_user_view(
                     user_facing=True,
                 )
 
-    prompt = st.chat_input("和健康教练说一句…")
+    prompt = st.chat_input("有哪里拿不准，直接问我…")
     if prompt:
         st.session_state.chat_log.append({"role": "user", "content": prompt, "reply": None})
         event = actions.classify_execution_event(prompt, plan)
@@ -548,13 +943,23 @@ def render_user_view(
 
 def render_summary(assessment: Assessment) -> None:
     summary = health_summary(assessment)
-    st.markdown("**本周健康总结**")
-    st.caption("AI 帮我理解")
-    st.markdown("**这周最值得关注**")
-    st.write(str(summary.get("insight") or ""))
-    st.markdown("**为什么这么判断**")
-    for item in summary.get("evidence") or []:
-        st.markdown(f"- {item}")
+    insight = html.escape(str(summary.get("insight") or ""))
+    evidence = summary.get("evidence") or []
+    chips = "".join(
+        f'<div class="bp-chip">{html.escape(str(item))}</div>' for item in evidence[:2]
+    )
+    st.markdown(
+        f"""
+        <div class="bp-card">
+          <div class="bp-coach-eyebrow"><span></span>AI 教练 · 本周健康总结</div>
+          <div class="bp-section-label">这周最值得关注</div>
+          <div class="bp-insight">{insight}</div>
+          <div class="bp-section-label">为什么</div>
+          <div class="bp-chips">{chips}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_workspace(
@@ -562,9 +967,30 @@ def render_workspace(
     assessment: Assessment,
     plan: actions.ActionPlan,
 ) -> actions.ActionPlan:
-    st.markdown(f"**{plan.title}**")
-    st.caption("AI 接下来帮你做")
+    if plan.action_type == actions.CLINICAL_HANDOFF:
+        shell = "handoff"
+        desc = "先复测一次，并尽快让医生看看。"
+    elif plan.action_type == actions.MAINTAIN_PROGRESS:
+        shell = "maintain"
+        desc = "接下来只验证一件事：这个变化能不能保持。"
+    else:
+        shell = "restore"
+        desc = "给原本的测量找一个更容易记住的生活节点。"
+
+    st.markdown(
+        f"""
+        <div class="bp-action-anchor {shell}"></div>
+        """,
+        unsafe_allow_html=True,
+    )
     with st.container(border=True):
+        st.markdown(
+            f"""
+            <div class="bp-action-title">{html.escape(plan.title)}</div>
+            <div class="bp-action-desc">{html.escape(desc)}</div>
+            """,
+            unsafe_allow_html=True,
+        )
         if plan.action_type == actions.RESTORE_ROUTINE:
             plan = _workspace_restore(patient_id, plan)
         elif plan.action_type == actions.CLINICAL_HANDOFF:
@@ -575,13 +1001,16 @@ def render_workspace(
 
 
 def _workspace_restore(patient_id: str, plan: actions.ActionPlan) -> actions.ActionPlan:
-    st.markdown("**本周目标**")
-    st.write("先把测量节奏重新接起来。")
-    st.markdown("**执行支持**")
     st.caption("不是改测量频率，只是把下一次测量绑到一个容易记住的节点。")
     options = list(actions.TRIGGER_OPTIONS)
     current = plan.trigger_node if plan.trigger_node in options else options[0]
-    choice = st.radio("固定生活节点", options, index=options.index(current), key=f"node_{patient_id}")
+    choice = st.radio(
+        "固定生活节点",
+        options,
+        index=options.index(current),
+        key=f"node_{patient_id}",
+        label_visibility="collapsed",
+    )
     if choice != plan.trigger_node:
         plan = apply_plan_event(patient_id, plan, "set_trigger", choice)
         st.rerun()
@@ -595,14 +1024,18 @@ def _workspace_restore(patient_id: str, plan: actions.ActionPlan) -> actions.Act
             plan = apply_plan_event(patient_id, plan, "set_custom_trigger", custom.strip())
             st.rerun()
     st.write(plan.execution_support)
-    st.markdown("**执行反馈**")
     if plan.status == "done":
         st.success("今天这次已经接上了。")
-        st.caption(f"状态：{plan.status}")
+        st.caption("下次我会先看看这个节奏有没有接起来。")
         return plan
     left, right = st.columns(2)
     with left:
-        if st.button("今天已测", key=f"measured_{patient_id}", width="stretch"):
+        if st.button(
+            "今天已测",
+            key=f"measured_{patient_id}",
+            type="primary",
+            width="stretch",
+        ):
             apply_plan_event(patient_id, plan, "measure_done")
             st.rerun()
     with right:
@@ -620,7 +1053,7 @@ def _workspace_restore(patient_id: str, plan: actions.ActionPlan) -> actions.Act
             if st.button("时间不方便", key=f"inconv_{patient_id}", width="stretch"):
                 apply_plan_event(patient_id, plan, "friction_inconvenient")
                 st.rerun()
-    st.caption(f"状态：{plan.status}")
+    st.caption("下次我会先看看这个节奏有没有接起来。")
     return plan
 
 
@@ -629,21 +1062,26 @@ def _workspace_handoff(
     assessment: Assessment,
     plan: actions.ActionPlan,
 ) -> actions.ActionPlan:
-    st.markdown("**本周目标**")
-    st.write("把这次异常顺利带到医生那里。")
-    st.markdown("**必须先做**")
-    st.write("先按规范复测一次确认，并尽快就医。")
-    st.markdown("**AI 产出：就诊摘要**")
-    if st.button("生成就诊摘要", key=f"handoff_{patient_id}"):
+    st.markdown(
+        '<div class="bp-must">必须先做：按规范复测一次确认，并尽快就医。</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "生成就诊摘要",
+        key=f"handoff_{patient_id}",
+        type="primary",
+        width="stretch",
+    ):
         text = actions.build_visit_summary(assessment)
         plan = apply_plan_event(patient_id, plan, "generate_handoff", text)
         st.rerun()
     if plan.handoff_text:
-        st.code(plan.handoff_text, language="markdown")
-        st.caption("可点右上角复制。")
+        with st.container(border=True):
+            st.markdown("**需要重点告诉医生 / 可以问医生**")
+            st.code(plan.handoff_text, language="markdown")
+            st.caption("可点右上角复制。这是就诊准备材料，不是诊断，也不是用药建议。")
     else:
         st.caption("点上方按钮后，会根据当前记录整理一份给医生看的摘要。")
-    st.markdown("**执行反馈**")
     a, b = st.columns(2)
     with a:
         if st.button("已复测", key=f"retest_{patient_id}", width="stretch"):
@@ -660,24 +1098,36 @@ def _workspace_handoff(
         bits.append("准备就医")
     if bits:
         st.success(" · ".join(bits))
-    st.caption(f"状态：{plan.status}")
     return plan
 
 
 def _workspace_maintain(assessment: Assessment, plan: actions.ActionPlan) -> actions.ActionPlan:
     summary = health_summary(assessment)
-    st.markdown("**现在看到的变化**")
-    for item in summary.get("evidence") or []:
-        st.markdown(f"- {item}")
-    st.markdown("**这阶段要验证什么**")
-    st.write("这个下降能不能继续保持。")
-    st.markdown("**怎么做**")
-    st.write("先保持现在的测量节奏。")
-    st.write("暂时不增加新的管理任务。")
-    st.markdown("**什么时候再看**")
-    st.write("新增一周记录后，我继续用同样口径比较。")
-    st.info("等待下一周期数据")
-    st.caption(f"状态：{plan.status} · 本轮观察变化，下一轮验证变化")
+    evidence = list(summary.get("evidence") or [])
+    now_text = evidence[0] if evidence else "最近两周出现下降"
+    next_text = "保持当前测量节奏"
+    review_text = "新增一周记录后再次比较"
+    st.markdown(
+        f"""
+        <div class="bp-steps">
+          <div class="bp-step">
+            <div class="bp-step-k">现在</div>
+            <div class="bp-step-v">{html.escape(str(now_text))}</div>
+          </div>
+          <div class="bp-step">
+            <div class="bp-step-k">下一步</div>
+            <div class="bp-step-v">{html.escape(next_text)}</div>
+          </div>
+          <div class="bp-step ok">
+            <div class="bp-step-k">复盘</div>
+            <div class="bp-step-v">{html.escape(review_text)}</div>
+          </div>
+        </div>
+        <div class="bp-pill">等待下一周期数据</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("本轮观察变化，下一轮验证变化是否继续。暂时不增加新的管理任务。")
     return plan
 
 
@@ -804,11 +1254,18 @@ st.markdown(
     '<div class="disclaimer-banner">研究原型，非医疗器械，不构成医疗建议</div>',
     unsafe_allow_html=True,
 )
-st.title("血压管家")
-st.caption("家庭血压监测的管理状态演示。140/90 仅用于可视化对比，不代表个体化治疗目标。")
+st.markdown(
+    """
+    <div class="bp-brand">
+      <h1>血压管家</h1>
+      <p>陪你看懂记录，也帮你把下一步做起来</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
-    st.markdown("**患者**")
+    st.caption("患者")
     selected_name = st.selectbox("选择患者", list(PATIENTS.keys()), label_visibility="collapsed")
     patient = PATIENTS[selected_name]
     if st.session_state.current_patient != selected_name:
@@ -820,8 +1277,11 @@ with st.sidebar:
     )
     playbook = get_playbook(assessment.state) if assessment.state else {}
 
-    st.markdown("**当前情况**")
-    st.markdown(f"### {state_label(assessment.state)}")
+    st.caption("当前情况")
+    st.markdown(f"#### {user_status_title(assessment.state)}")
+    sub = user_status_sub(assessment.state)
+    if sub:
+        st.caption(sub)
 
     family_on = st.toggle(
         "家属共享",
