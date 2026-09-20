@@ -508,7 +508,7 @@ def inject_styles() -> None:
           [data-testid="stHeader"] { background: rgba(243,244,246,0.92); }
           [data-testid="stToolbar"] { background: transparent; }
           .block-container {
-            padding-top: 1.6rem;
+            padding-top: 3.25rem;
             padding-bottom: 3.5rem;
             max-width: 1120px;
           }
@@ -522,9 +522,13 @@ def inject_styles() -> None:
             border: 1px solid #F0E2C8;
             color: #7A6548;
             border-radius: 12px;
-            padding: 0.55rem 0.9rem;
-            margin: 0 0 1.1rem 0;
-            font-size: 0.84rem;
+            padding: 0.75rem 1rem;
+            margin: 0.35rem 0 1.1rem 0;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            overflow: visible;
+            display: block;
+            box-sizing: border-box;
           }
           .bp-brand { margin: 0 0 1.25rem 0; }
           .bp-brand h1 {
